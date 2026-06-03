@@ -116,6 +116,8 @@ type RuntimeTrace struct {
 	BlockedByResidency int              `json:"blocked_by_residency"`
 	RerankedCandidates int              `json:"reranked_candidates"`
 	DecisionMode       string           `json:"decision_mode"`
+	ShadowMode         bool             `json:"shadow_mode,omitempty"`
+	WouldBlockByACL    int              `json:"would_block_by_acl,omitempty"`
 	FailureStage       string           `json:"failure_stage,omitempty"`
 	ErrorCode          string           `json:"error_code,omitempty"`
 	ErrorMessage       string           `json:"error_message,omitempty"`

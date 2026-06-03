@@ -310,6 +310,50 @@ func TestAuditWrite_FailsEngine(t *testing.T) {
 	}
 }
 
+func TestExecuteShadowModeReturnsButRecordsWouldBlock(t *testing.T) {
+	e := testEngineWithACL(false) // ACL denies every chunk
+	e.ShadowMode = true
+
+	resp := e.Execute(context.Background(), runtime.QueryRequest{TenantID: "acme", Region: "US", UserID: "general_user", Question: "policy"})
+
+	if len(resp.Citations) != 1 {
+		t.Fatalf("shadow mode must still return the would-be-blocked chunk, got %+v", resp.Citations)
+	}
+	if !resp.Trace.ShadowMode || resp.Trace.WouldBlockByACL != 1 {
+		t.Fatalf("expected shadow trace with would_block_by_acl=1, got %+v", resp.Trace)
+	}
+	if resp.Trace.BlockedByACL != 0 {
+		t.Fatalf("shadow mode must not actually block, got blocked_by_acl=%d", resp.Trace.BlockedByACL)
+	}
+	if resp.Trace.DecisionMode != "engine_shadow_observe" {
+		t.Fatalf("expected shadow decision mode, got %s", resp.Trace.DecisionMode)
+	}
+	if len(resp.Trace.AccessDecisions) != 1 || resp.Trace.AccessDecisions[0].Allowed {
+		t.Fatalf("expected one recorded DENY decision (the report), got %+v", resp.Trace.AccessDecisions)
+	}
+}
+
+func TestExecuteShadowModeStillBlocksCrossTenant(t *testing.T) {
+	candidates := testCandidates(1)
+	candidates[0].Chunk.TenantID = "other_tenant"
+	e := Engine{
+		Config:     testTimeouts(),
+		Backend:    fakeRetrieval{candidates: candidates},
+		ACL:        slowACL{allowed: true},
+		Auditor:    memoryAudit{},
+		ShadowMode: true,
+	}
+
+	resp := e.Execute(context.Background(), runtime.QueryRequest{TenantID: "acme", Region: "US", UserID: "finance_user", Question: "policy"})
+
+	if len(resp.Citations) != 0 {
+		t.Fatalf("shadow mode must NEVER leak cross-tenant chunks, got %+v", resp.Citations)
+	}
+	if resp.Trace.BlockedByResidency != 1 {
+		t.Fatalf("expected cross-tenant chunk blocked by residency even in shadow mode, got %+v", resp.Trace)
+	}
+}
+
 func testEngineWithACL(allowed bool) Engine {
 	return Engine{
 		Config:  testTimeouts(),

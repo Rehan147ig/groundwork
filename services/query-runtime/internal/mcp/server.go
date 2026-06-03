@@ -21,21 +21,27 @@ import (
 
 // Server is the MCP server that wraps the Groundwork Engine.
 type Server struct {
-	engine   *engine.Engine
-	tenantID string
-	region   string
-	writer   io.Writer
-	mu       sync.Mutex
+	engine    *engine.Engine
+	tenantID  string
+	region    string
+	verifier  runtime.IdentityVerifier
+	allowDemo bool
+	writer    io.Writer
+	mu        sync.Mutex
 }
 
 // NewServer creates an MCP server bound to a specific tenant context.
-// In production, the tenant context comes from the API key used to launch the MCP process.
-func NewServer(eng *engine.Engine, tenantID, region string) *Server {
+// In production, the tenant context comes from the API key used to launch the MCP
+// process, and the effective end-user is derived from a verified user_token (OIDC/JWT).
+// allowDemo permits a raw user_id only when ALLOW_DEMO_IDENTITY=true.
+func NewServer(eng *engine.Engine, tenantID, region string, verifier runtime.IdentityVerifier, allowDemo bool) *Server {
 	return &Server{
-		engine:   eng,
-		tenantID: tenantID,
-		region:   region,
-		writer:   os.Stdout,
+		engine:    eng,
+		tenantID:  tenantID,
+		region:    region,
+		verifier:  verifier,
+		allowDemo: allowDemo,
+		writer:    os.Stdout,
 	}
 }
 
@@ -97,8 +103,9 @@ type mcpContent struct {
 // --- Tool input types ---
 
 type groundworkSearchArgs struct {
-	UserID   string `json:"user_id"`
-	Question string `json:"question"`
+	UserID    string `json:"user_id"`
+	UserToken string `json:"user_token"`
+	Question  string `json:"question"`
 }
 
 // Run starts the MCP server, reading JSON-RPC messages from stdin and writing
@@ -162,16 +169,20 @@ func (s *Server) handleToolsList(req jsonrpcRequest) {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"user_token": map[string]any{
+						"type":        "string",
+						"description": "A signed end-user identity assertion (OIDC/JWT). Groundwork verifies it and derives the effective user from the sub/email/preferred_username claims, then checks that user's live permissions against every retrieved document. Required in production.",
+					},
 					"user_id": map[string]any{
 						"type":        "string",
-						"description": "The identity of the user on whose behalf this search is being performed (e.g. 'alice@company.com' or 'financial_bot'). Groundwork will check this user's live permissions against every retrieved document.",
+						"description": "Demo/dev only: a raw user identifier, honored ONLY when ALLOW_DEMO_IDENTITY=true. In production this is ignored in favor of the verified user_token.",
 					},
 					"question": map[string]any{
 						"type":        "string",
 						"description": "The natural language question to search for in the enterprise knowledge base.",
 					},
 				},
-				"required": []string{"user_id", "question"},
+				"required": []string{"question"},
 			},
 		},
 	}
@@ -196,19 +207,36 @@ func (s *Server) handleToolsCall(ctx context.Context, req jsonrpcRequest) {
 func (s *Server) handleGroundworkSearch(ctx context.Context, id any, rawArgs json.RawMessage) {
 	var args groundworkSearchArgs
 	if err := json.Unmarshal(rawArgs, &args); err != nil {
-		s.sendError(id, -32602, "invalid arguments: user_id and question are required")
+		s.sendError(id, -32602, "invalid arguments: question (and a verified user_token) are required")
 		return
 	}
-	if args.UserID == "" || args.Question == "" {
-		s.sendError(id, -32602, "user_id and question are required")
+	if args.Question == "" {
+		s.sendError(id, -32602, "question is required")
 		return
 	}
 
-	// Build the query request with tenant context from the MCP server config
+	// Effective end-user identity. A signed user_token is always verified and becomes
+	// the effective user; the raw user_id is honored only in demo mode. Fail closed on
+	// a missing/invalid/expired/unsigned assertion. Tenant/region come from the MCP
+	// process's API-key-derived context, never from the caller-supplied arguments.
+	identity, err := runtime.ResolveEffectiveIdentity(ctx, s.verifier, s.allowDemo, args.UserToken, args.UserID)
+	if err != nil {
+		s.sendResult(id, mcpToolResult{
+			Content: []mcpContent{{
+				Type: "text",
+				Text: fmt.Sprintf("FAIL CLOSED: a verified end-user identity is required. %v\n\nNo query was executed and no documents were returned.", err),
+			}},
+			IsError: true,
+		})
+		return
+	}
+
+	// Build the query request with tenant context from the MCP server config. The
+	// effective user comes from the verified identity, never from the raw arguments.
 	queryReq := runtime.QueryRequest{
 		TenantID: s.tenantID,
 		Region:   s.region,
-		UserID:   args.UserID,
+		UserID:   identity.UserID,
 		Question: args.Question,
 	}
 
@@ -217,7 +245,39 @@ func (s *Server) handleGroundworkSearch(ctx context.Context, id any, rawArgs jso
 
 	// Format the response for the AI agent
 	var resultText string
-	if len(resp.Citations) == 0 {
+	switch {
+	case resp.Trace.ShadowMode:
+		// Observe-only: return what the agent receives today, but flag the chunks
+		// Groundwork would strip once enforcement is switched on.
+		resultText = fmt.Sprintf(
+			"SHADOW MODE (observe-only, no enforcement): returning %d document(s) the agent receives today.\nGroundwork WOULD BLOCK %d of these once enforcement is switched on.\n\n",
+			len(resp.Citations),
+			resp.Trace.WouldBlockByACL,
+		)
+		wouldBlock := map[string]bool{}
+		for _, decision := range resp.Trace.AccessDecisions {
+			if !decision.Allowed {
+				wouldBlock[decision.ChunkID] = true
+			}
+		}
+		for i, citation := range resp.Citations {
+			status := "ALLOWED"
+			if wouldBlock[citation.ChunkID] {
+				status = "WOULD BE BLOCKED"
+			}
+			resultText += fmt.Sprintf(
+				"[%d] (%s) Document: %s | Chunk: %s | Score: %.3f\n%s\n\n",
+				i+1, status, citation.DocumentID, citation.ChunkID, citation.Score, citation.Text,
+			)
+		}
+		resultText += fmt.Sprintf(
+			"---\nTrace: %s | Would block by ACL: %d | Blocked by Region: %d | Decision: %s",
+			resp.Trace.TraceID,
+			resp.Trace.WouldBlockByACL,
+			resp.Trace.BlockedByResidency,
+			resp.Trace.DecisionMode,
+		)
+	case len(resp.Citations) == 0:
 		resultText = fmt.Sprintf(
 			"ACCESS DENIED or NO RESULTS: %s\n\nTrace: %s | Decision: %s | Blocked by ACL: %d | Blocked by Region: %d",
 			resp.Answer,
@@ -226,7 +286,7 @@ func (s *Server) handleGroundworkSearch(ctx context.Context, id any, rawArgs jso
 			resp.Trace.BlockedByACL,
 			resp.Trace.BlockedByResidency,
 		)
-	} else {
+	default:
 		resultText = fmt.Sprintf("Found %d permitted documents (confidence: %.2f):\n\n", len(resp.Citations), resp.Confidence)
 		for i, citation := range resp.Citations {
 			resultText += fmt.Sprintf(

@@ -19,10 +19,19 @@ import (
 )
 
 type Server struct {
-	cfg      Config
-	backend  Backend
-	apiKeys  APIKeyResolver
-	executor QueryExecutor
+	cfg               Config
+	backend           Backend
+	apiKeys           APIKeyResolver
+	executor          QueryExecutor
+	identity          IdentityVerifier
+	allowDemoIdentity bool
+}
+
+// SetIdentity wires the end-user identity verifier and the demo-identity switch.
+// When allowDemo is false and no valid assertion is present, /v1/query fails closed.
+func (s *Server) SetIdentity(verifier IdentityVerifier, allowDemo bool) {
+	s.identity = verifier
+	s.allowDemoIdentity = allowDemo
 }
 
 type QueryExecutor interface {
@@ -49,7 +58,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /livez", s.livez)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.Handle("GET /metrics", promhttp.Handler())
-	mux.HandleFunc("POST /v1/query", s.requireAPIKey("query", s.query))
+	mux.HandleFunc("POST /v1/query", s.requireAPIKey("query", s.requireVerifiedIdentity(s.query)))
 	mux.HandleFunc("POST /v1/admin/api-keys", s.requireAPIKey("admin", s.createAPIKey))
 	mux.HandleFunc("POST /v1/admin/api-keys/{id}/rotate", s.requireAPIKey("admin", s.rotateAPIKey))
 	mux.HandleFunc("DELETE /v1/admin/api-keys/{id}", s.requireAPIKey("admin", s.revokeAPIKey))
@@ -89,8 +98,16 @@ func (s *Server) query(w http.ResponseWriter, r *http.Request) {
 	}
 	req.TenantID = tenant.TenantID
 	req.Region = tenant.Region
-	if req.UserID == "" || req.Question == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user_id and question are required"})
+
+	// Effective end-user identity: a verified assertion always wins and the
+	// body-supplied user_id is ignored. The body user_id is honored only in demo
+	// mode (ALLOW_DEMO_IDENTITY=true). tenant_id/region above come solely from the
+	// API key and are never taken from the request body.
+	if decision, ok := identityFromContext(r.Context()); ok && decision.identity.Verified {
+		req.UserID = decision.identity.UserID
+	}
+	if req.Question == "" || req.UserID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "question and a verified user identity are required"})
 		return
 	}
 	if s.executor == nil {
@@ -225,6 +242,60 @@ type tenantContextKey struct{}
 func tenantFromContext(ctx context.Context) (TenantContext, bool) {
 	tenant, ok := ctx.Value(tenantContextKey{}).(TenantContext)
 	return tenant, ok
+}
+
+type identityContextKey struct{}
+
+// identityDecision carries the outcome of identity middleware. A verified
+// identity overrides any body-supplied user_id; demo==true means the request may
+// fall back to the body user_id (dev only).
+type identityDecision struct {
+	identity Identity
+	demo     bool
+}
+
+func identityFromContext(ctx context.Context) (identityDecision, bool) {
+	decision, ok := ctx.Value(identityContextKey{}).(identityDecision)
+	return decision, ok
+}
+
+func extractUserAssertion(r *http.Request) string {
+	value := strings.TrimSpace(r.Header.Get("X-Groundwork-User-Assertion"))
+	const prefix = "Bearer "
+	if strings.HasPrefix(strings.ToLower(value), strings.ToLower(prefix)) {
+		return strings.TrimSpace(value[len(prefix):])
+	}
+	return value
+}
+
+// requireVerifiedIdentity enforces that /v1/query carries a cryptographically
+// verified end-user identity. A signed assertion (X-Groundwork-User-Assertion) is
+// always verified and, on success, becomes the effective user. When no assertion
+// is supplied the request fails closed unless demo identity is explicitly enabled.
+func (s *Server) requireVerifiedIdentity(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := extractUserAssertion(r)
+		if token != "" {
+			if s.identity == nil {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "identity_verifier_unavailable"})
+				return
+			}
+			id, err := s.identity.Verify(r.Context(), token)
+			if err != nil {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_identity_assertion"})
+				return
+			}
+			ctx := context.WithValue(r.Context(), identityContextKey{}, identityDecision{identity: id})
+			next(w, r.WithContext(ctx))
+			return
+		}
+		if !s.allowDemoIdentity {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "verified_identity_required"})
+			return
+		}
+		ctx := context.WithValue(r.Context(), identityContextKey{}, identityDecision{demo: true})
+		next(w, r.WithContext(ctx))
+	}
 }
 
 func (s *Server) rrf(vector []Candidate, keyword []Candidate) []Candidate {

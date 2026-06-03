@@ -34,6 +34,12 @@ type Engine struct {
 	ACL     ACLChecker
 	Auditor AuditWriter
 
+	// ShadowMode runs the engine in observe-only mode: tenant and region remain hard
+	// boundaries, but per-user ACL denials are recorded rather than enforced, so
+	// operators can see what the agent receives today vs. what would be blocked once
+	// enforcement is switched on. Default (false) is full fail-closed enforcement.
+	ShadowMode bool
+
 	RetrievalCircuit *CircuitBreaker
 	ACLCircuit       *CircuitBreaker
 	mu               sync.Mutex
@@ -61,8 +67,23 @@ func (e *Engine) Execute(ctx context.Context, req runtime.QueryRequest) runtime.
 		return e.failClosed(totalCtx, req, started, "qdrant", classifyEngineError("qdrant", err), err)
 	}
 
-	permitted, blockedACL, blockedRegion, decisions := e.filterChunksConcurrently(totalCtx, cfg, req, candidates)
-	reranked := rerank(permitted, 7)
+	permitted, blockedACL, blockedRegion, decisions, blockedValid := e.filterChunksConcurrently(totalCtx, cfg, req, candidates)
+
+	// Shadow mode is observe-only. Tenant and region stay hard boundaries, but the
+	// per-user ACL decision is recorded rather than enforced: chunks that WOULD be
+	// blocked are still returned so operators can compare what the agent receives
+	// today against what Groundwork would strip once enforcement is switched on.
+	resultSet := permitted
+	decisionMode := "engine_live_acl_fail_closed"
+	wouldBlockByACL := 0
+	if e.ShadowMode {
+		resultSet = append(append(make([]runtime.Candidate, 0, len(permitted)+len(blockedValid)), permitted...), blockedValid...)
+		decisionMode = "engine_shadow_observe"
+		wouldBlockByACL = blockedACL
+		blockedACL = 0
+	}
+
+	reranked := rerank(resultSet, 7)
 	confidence := confidence(reranked)
 
 	trace := runtime.RuntimeTrace{
@@ -77,7 +98,9 @@ func (e *Engine) Execute(ctx context.Context, req runtime.QueryRequest) runtime.
 		BlockedByACL:       blockedACL,
 		BlockedByResidency: blockedRegion,
 		RerankedCandidates: len(reranked),
-		DecisionMode:       "engine_live_acl_fail_closed",
+		DecisionMode:       decisionMode,
+		ShadowMode:         e.ShadowMode,
+		WouldBlockByACL:    wouldBlockByACL,
 		AccessDecisions:    decisions,
 	}
 	trace.ImmutableDigest = traceDigest(trace)
@@ -131,7 +154,7 @@ func (e *Engine) retrieve(ctx context.Context, cfg TimeoutConfig, req runtime.Qu
 	return candidates, nil
 }
 
-func (e *Engine) filterChunksConcurrently(ctx context.Context, cfg TimeoutConfig, req runtime.QueryRequest, candidates []runtime.Candidate) ([]runtime.Candidate, int, int, []runtime.AccessDecision) {
+func (e *Engine) filterChunksConcurrently(ctx context.Context, cfg TimeoutConfig, req runtime.QueryRequest, candidates []runtime.Candidate) ([]runtime.Candidate, int, int, []runtime.AccessDecision, []runtime.Candidate) {
 	e.mu.Lock()
 	if e.ACLCircuit == nil {
 		e.ACLCircuit = NewCircuitBreaker(3, 10*time.Second)
@@ -146,7 +169,7 @@ func (e *Engine) filterChunksConcurrently(ctx context.Context, cfg TimeoutConfig
 		}
 		gwmetrics.RecordOpenFGAUnreachable(req.TenantID)
 		gwmetrics.SetCircuitBreakerState("openfga", circuitMetricState(aclCircuit.State()))
-		return nil, len(candidates), 0, decisions
+		return nil, len(candidates), 0, decisions, nil
 	}
 
 	aclCtx, cancel := context.WithTimeout(ctx, cfg.OpenFGACheck)
@@ -194,6 +217,10 @@ func (e *Engine) filterChunksConcurrently(ctx context.Context, cfg TimeoutConfig
 	}
 
 	permitted := make([]runtime.Candidate, 0, len(candidates))
+	// blockedValid holds candidates that passed the tenant + region boundary but were
+	// denied (or could not be confirmed) by the ACL layer — exactly what shadow mode
+	// surfaces as "would be blocked" while still returning them.
+	blockedValid := make([]runtime.Candidate, 0, len(candidates))
 	decisions := make([]runtime.AccessDecision, 0, len(candidates))
 	blockedACL := 0
 	blockedRegion := 0
@@ -214,6 +241,7 @@ func (e *Engine) filterChunksConcurrently(ctx context.Context, cfg TimeoutConfig
 			}
 			if !item.allowed {
 				blockedACL++
+				blockedValid = append(blockedValid, item.candidate)
 				gwmetrics.RecordBlockedChunks(req.TenantID, item.reason, 1)
 				continue
 			}
@@ -229,7 +257,7 @@ func (e *Engine) filterChunksConcurrently(ctx context.Context, cfg TimeoutConfig
 			aclCircuit.ReportFailure()
 			gwmetrics.RecordOpenFGAUnreachable(req.TenantID)
 			gwmetrics.SetCircuitBreakerState("openfga", circuitMetricState(aclCircuit.State()))
-			return permitted, blockedACL, blockedRegion, decisions
+			return permitted, blockedACL, blockedRegion, decisions, blockedValid
 		}
 	}
 
@@ -239,7 +267,7 @@ func (e *Engine) filterChunksConcurrently(ctx context.Context, cfg TimeoutConfig
 		aclCircuit.ReportSuccess()
 	}
 	gwmetrics.SetCircuitBreakerState("openfga", circuitMetricState(aclCircuit.State()))
-	return permitted, blockedACL, blockedRegion, decisions
+	return permitted, blockedACL, blockedRegion, decisions, blockedValid
 }
 
 func (e *Engine) writeAudit(ctx context.Context, cfg TimeoutConfig, trace runtime.RuntimeTrace, req runtime.QueryRequest) error {

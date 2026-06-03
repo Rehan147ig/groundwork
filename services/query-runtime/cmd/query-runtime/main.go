@@ -64,7 +64,19 @@ func main() {
 		Backend: engine.VectorRetrievalClient{Vector: backend.Vector},
 		ACL:     backend.ACL,
 		Auditor: engine.RuntimeTraceAuditWriter{Trace: backend.Trace},
+		// Observe-only mode for safe enterprise onboarding: evaluate permissions and
+		// log what WOULD be blocked, but do not strip. Tenant/region stay enforced.
+		ShadowMode: os.Getenv("GROUNDWORK_SHADOW_MODE") == "true",
 	}
+
+	// Verified end-user identity: tenant/region come from the API key, while the
+	// effective user is derived from a signed OIDC/JWT assertion (fail closed). A raw
+	// demo user_id is honored only when ALLOW_DEMO_IDENTITY=true.
+	identityVerifier, err := runtime.BuildIdentityVerifier()
+	if err != nil {
+		log.Fatal(err)
+	}
+	allowDemoIdentity := os.Getenv("ALLOW_DEMO_IDENTITY") == "true"
 
 	// MCP mode: run as stdio MCP server for AI agents (Claude Desktop, etc.)
 	if os.Getenv("GROUNDWORK_MCP") == "true" {
@@ -72,6 +84,8 @@ func main() {
 			core,
 			env("BOOTSTRAP_TENANT_ID", "tenant_demo"),
 			env("BOOTSTRAP_TENANT_REGION", "uk"),
+			identityVerifier,
+			allowDemoIdentity,
 		)
 		log.Println("groundwork MCP server starting (stdio transport)")
 		if err := mcpServer.Run(context.Background()); err != nil {
@@ -82,6 +96,7 @@ func main() {
 
 	// HTTP mode: run as REST API server
 	server := runtime.NewServerWithExecutor(cfg, backend, apiKeys, core)
+	server.SetIdentity(identityVerifier, allowDemoIdentity)
 	log.Printf("groundwork query runtime listening on %s", cfg.Addr)
 	if err := http.ListenAndServe(cfg.Addr, server.Routes()); err != nil {
 		log.Fatal(err)

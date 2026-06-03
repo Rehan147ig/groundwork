@@ -1,77 +1,127 @@
-// Command acl-sync reconciles enterprise source-of-truth permissions into OpenFGA and
-// reports drift. It currently uses the mock enterprise connector; real Microsoft Graph /
-// SharePoint, Okta, and Google connectors plug in behind the same aclsync.Connector
-// interface later.
+// Command acl-sync reconciles enterprise source-of-truth permissions into OpenFGA.
 //
-//	# Sync the mock connector into a live OpenFGA, then report drift:
-//	OPENFGA_URL=http://openfga:8080 go run ./cmd/acl-sync -tenant tenant_demo
+// ACL_SYNC_MODE=once  (default): perform one full sync and exit.
+// ACL_SYNC_MODE=watch        : perform an initial sync, then continuously apply
+// permission changes and periodically reconcile + check drift until SIGINT/SIGTERM.
 //
-//	# Drift-only (read-only) check (exit 2 if drift is found):
-//	OPENFGA_URL=http://openfga:8080 go run ./cmd/acl-sync -drift-only
+// Currently uses the mock connector (ACL_CONNECTOR_TYPE=mock); real Microsoft Graph /
+// Okta / Google connectors plug in behind the same aclsync.Connector interface later.
 //
-// With no OPENFGA_URL set it uses an in-memory sink (dev/demo only).
+// Environment:
+//
+//	ACL_SYNC_MODE                     once|watch          (default once)
+//	ACL_SYNC_TENANT_ID                tenant to sync      (default tenant_demo)
+//	ACL_SYNC_INTERVAL_SECONDS         reconcile interval  (default 60,  watch mode)
+//	ACL_DRIFT_CHECK_INTERVAL_SECONDS  drift interval      (default 300, watch mode)
+//	ACL_CONNECTOR_TYPE                mock                (default mock)
+//	OPENFGA_API_URL (or OPENFGA_URL)  OpenFGA endpoint; if unset, in-memory sink (dev only)
+//	OPENFGA_STORE_ID                  store id (optional; else resolved by name)
+//	OPENFGA_STORE_NAME                store name          (default groundwork_local)
+//	OPENFGA_AUTHORIZATION_MODEL_ID    pinned model id (optional)
+//	ACL_SYNC_METRICS_ADDR             expose Prometheus /metrics (optional, e.g. :9090)
 package main
 
 import (
 	"context"
-	"encoding/json"
-	"flag"
-	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"groundwork/query-runtime/internal/aclsync"
+	"groundwork/query-runtime/internal/metrics"
 )
 
 func main() {
-	tenant := flag.String("tenant", "tenant_demo", "tenant id to sync")
-	driftOnly := flag.Bool("drift-only", false, "only report drift; do not write tuples")
-	flag.Parse()
-
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	connector := aclsync.NewMockConnector()
 
-	var sink aclsync.TupleSink
-	if url := os.Getenv("OPENFGA_URL"); url != "" {
-		sink = aclsync.NewOpenFGASink(url, env("OPENFGA_STORE_NAME", "groundwork_local"))
-		logger.Info("acl-sync using OpenFGA sink", "url", url)
-	} else {
-		sink = aclsync.NewMemoryFGA()
-		logger.Warn("OPENFGA_URL not set; using in-memory sink (dev/demo only, not persisted)")
+	cfg := aclsync.Config{
+		Mode:               aclsync.Mode(env("ACL_SYNC_MODE", "once")),
+		TenantID:           env("ACL_SYNC_TENANT_ID", "tenant_demo"),
+		SyncInterval:       time.Duration(envInt("ACL_SYNC_INTERVAL_SECONDS", 60)) * time.Second,
+		DriftCheckInterval: time.Duration(envInt("ACL_DRIFT_CHECK_INTERVAL_SECONDS", 300)) * time.Second,
 	}
 
-	syncer := aclsync.NewSyncer(connector, sink, logger)
-	ctx := context.Background()
-
-	if !*driftOnly {
-		res, err := syncer.SyncToOpenFGA(ctx, *tenant)
-		if err != nil {
-			logger.Error("sync failed", "err", err)
-			os.Exit(1)
-		}
-		printJSON("sync_result", res)
-	}
-
-	drift, err := syncer.DetectDrift(ctx, *tenant)
-	if err != nil {
-		logger.Error("drift detection failed", "err", err)
+	connectorType := env("ACL_CONNECTOR_TYPE", "mock")
+	var connector aclsync.Connector
+	switch connectorType {
+	case "mock":
+		connector = aclsync.NewMockConnector()
+	default:
+		logger.Error("unsupported connector type (only 'mock' is available in this milestone)", "type", connectorType)
 		os.Exit(1)
 	}
-	printJSON("drift_report", drift)
 
-	if *driftOnly && drift.HasDrift() {
-		os.Exit(2)
+	var sink aclsync.TupleSink
+	if url := firstNonEmpty(os.Getenv("OPENFGA_API_URL"), os.Getenv("OPENFGA_URL")); url != "" {
+		fs := aclsync.NewOpenFGASink(url, env("OPENFGA_STORE_NAME", "groundwork_local"))
+		fs.StoreID = os.Getenv("OPENFGA_STORE_ID")
+		fs.AuthorizationModelID = os.Getenv("OPENFGA_AUTHORIZATION_MODEL_ID")
+		sink = fs
+		logger.Info("acl-sync using OpenFGA sink", "url", url, "store_id", fs.StoreID, "store_name", fs.StoreName)
+	} else {
+		sink = aclsync.NewMemoryFGA()
+		logger.Warn("no OpenFGA endpoint set; using in-memory sink (dev/demo only, not persisted)")
+	}
+
+	metrics.RegisterAll()
+	if addr := os.Getenv("ACL_SYNC_METRICS_ADDR"); addr != "" {
+		go func() {
+			mux := http.NewServeMux()
+			mux.Handle("/metrics", promhttp.Handler())
+			if err := http.ListenAndServe(addr, mux); err != nil {
+				logger.Error("metrics endpoint stopped", "err", err)
+			}
+		}()
+		logger.Info("metrics endpoint listening", "addr", addr)
+	}
+
+	svc := aclsync.NewService(connector, aclsync.NewSyncer(connector, sink, logger), cfg, logger, promMetrics{})
+
+	// Graceful shutdown on SIGINT/SIGTERM.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
+		logger.Error("acl-sync exited with error", "err", err)
+		os.Exit(1)
 	}
 }
 
-func printJSON(label string, v any) {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	fmt.Printf("%s:\n%s\n", label, string(b))
-}
+// promMetrics adapts the Prometheus collectors to aclsync.Metrics.
+type promMetrics struct{}
+
+func (promMetrics) SyncRun(t string)                       { metrics.RecordACLSyncRun(t) }
+func (promMetrics) SyncError(t string)                     { metrics.RecordACLSyncError(t) }
+func (promMetrics) DriftItems(t string, n int)             { metrics.SetACLSyncDriftItems(t, n) }
+func (promMetrics) SyncDuration(t string, d time.Duration) { metrics.RecordACLSyncDuration(t, d) }
 
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

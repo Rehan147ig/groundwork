@@ -40,6 +40,10 @@ type Syncer struct {
 	Connector Connector
 	Sink      TupleSink
 	Logger    *slog.Logger
+	// AllowEmptyDestructive permits deletes even when the source snapshot is empty.
+	// Default false: an empty/unconfirmed snapshot never deletes existing tuples, which
+	// guards against wiping all permissions if a connector outage returns nothing.
+	AllowEmptyDestructive bool
 }
 
 func NewSyncer(c Connector, sink TupleSink, logger *slog.Logger) *Syncer {
@@ -70,6 +74,16 @@ func (s *Syncer) SyncToOpenFGA(ctx context.Context, tenantID string) (SyncResult
 
 	toWrite := difference(desired, have)
 	toDelete := difference(have, desired)
+
+	// Safety: never delete on an empty (unconfirmed) snapshot unless explicitly allowed.
+	// A revocation arrives as a non-empty snapshot missing the revoked grant, or as an
+	// explicit change event — both safe. An all-empty snapshot is treated as suspect
+	// (e.g. a connector outage) and must not wipe existing permissions.
+	if len(toDelete) > 0 && len(desired) == 0 && !s.AllowEmptyDestructive {
+		s.Logger.Warn("acl_sync_skipped_destructive_delete",
+			"tenant", tenantID, "would_delete", len(toDelete), "reason", "empty_or_unconfirmed_snapshot")
+		toDelete = nil
+	}
 
 	if len(toWrite) > 0 {
 		if err := s.Sink.WriteTuples(ctx, tenantID, toWrite); err != nil {

@@ -206,24 +206,56 @@ func (o *OpenFGAChecker) postJSON(ctx context.Context, path string, body any, ou
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+// openFGAModel defines the Groundwork authorization model. It supports users,
+// (nested) groups, folders, and documents that inherit viewers from their parent
+// folder. The query-time check ("user X viewer document Y") is unchanged — OpenFGA
+// resolves group membership and folder inheritance through this model, so the
+// CanAccess logic does not need to know about folders. The ACL-sync framework
+// (internal/aclsync) writes tuples that conform to this model.
 func openFGAModel() map[string]any {
+	// directly_related_user_types entry sets reused across relations.
+	userAndGroupMembers := []map[string]string{{"type": "user"}, {"type": "group", "relation": "member"}}
 	return map[string]any{
 		"schema_version": "1.1",
 		"type_definitions": []map[string]any{
 			{"type": "user"},
 			{
+				// Groups support nested membership: a group#member can be a member of
+				// another group (e.g. group:finance#member member group:employees).
 				"type":      "group",
 				"relations": map[string]any{"member": map[string]any{"this": map[string]any{}}},
 				"metadata": map[string]any{"relations": map[string]any{"member": map[string]any{
-					"directly_related_user_types": []map[string]string{{"type": "user"}},
+					"directly_related_user_types": userAndGroupMembers,
 				}}},
 			},
 			{
-				"type":      "document",
+				// Folders carry viewer grants for users and groups.
+				"type":      "folder",
 				"relations": map[string]any{"viewer": map[string]any{"this": map[string]any{}}},
 				"metadata": map[string]any{"relations": map[string]any{"viewer": map[string]any{
-					"directly_related_user_types": []map[string]string{{"type": "user"}, {"type": "group", "relation": "member"}},
+					"directly_related_user_types": userAndGroupMembers,
 				}}},
+			},
+			{
+				// A document has a parent folder and inherits that folder's viewers in
+				// addition to any directly-granted viewers (union with "viewer from parent").
+				"type": "document",
+				"relations": map[string]any{
+					"parent": map[string]any{"this": map[string]any{}},
+					"viewer": map[string]any{
+						"union": map[string]any{"child": []map[string]any{
+							{"this": map[string]any{}},
+							{"tupleToUserset": map[string]any{
+								"tupleset":        map[string]any{"relation": "parent"},
+								"computedUserset": map[string]any{"relation": "viewer"},
+							}},
+						}},
+					},
+				},
+				"metadata": map[string]any{"relations": map[string]any{
+					"parent": map[string]any{"directly_related_user_types": []map[string]string{{"type": "folder"}}},
+					"viewer": map[string]any{"directly_related_user_types": userAndGroupMembers},
+				}},
 			},
 		},
 	}

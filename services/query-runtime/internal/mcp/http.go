@@ -34,6 +34,13 @@ func NewHTTPServer(eng *engine.Engine, apiKeys runtime.APIKeyResolver, verifier 
 	}
 }
 
+// SetCanonicalIdentity forwards the canonical principal resolver and feature flag to the
+// wrapped MCP server, so the HTTP transport resolves canonical principals identically to
+// stdio (it shares the same dispatch/executeSearch path).
+func (h *HTTPServer) SetCanonicalIdentity(resolver runtime.PrincipalResolver, canonical bool) {
+	h.mcp.SetCanonicalIdentity(resolver, canonical)
+}
+
 func (h *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONStatus(w, http.StatusMethodNotAllowed, map[string]string{

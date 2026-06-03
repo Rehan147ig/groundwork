@@ -349,6 +349,16 @@ func auditEntryFromTrace(trace runtime.RuntimeTrace, req runtime.QueryRequest) A
 		aclDecision = "denied"
 		reason = firstBlockedReason(trace.AccessDecisions)
 	}
+	// When canonical identity is enabled the runtime resolves the verified end-user to a
+	// canonical principal and sets req.UserID = "principal:<uuid>" before Engine.Execute.
+	// We record that resolution on the immutable audit row without changing the engine's
+	// contract: a "principal:" prefix means the query ran against a canonical principal.
+	identityResolution := ""
+	principalID := ""
+	if id := strings.TrimPrefix(trace.UserID, "principal:"); id != trace.UserID {
+		identityResolution = "resolved"
+		principalID = id
+	}
 	return AuditEntry{
 		TraceID:             trace.TraceID,
 		TenantID:            trace.TenantID,
@@ -368,6 +378,8 @@ func auditEntryFromTrace(trace runtime.RuntimeTrace, req runtime.QueryRequest) A
 		DecisionMode:        trace.DecisionMode,
 		ACLDecision:         aclDecision,
 		Reason:              reason,
+		IdentityResolution:  identityResolution,
+		PrincipalID:         principalID,
 	}
 }
 

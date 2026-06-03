@@ -4,9 +4,11 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"groundwork/query-runtime/internal/aclsync"
+	"groundwork/query-runtime/internal/runtime"
 )
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -155,6 +157,100 @@ func TestSnapshotAccessMatrix(t *testing.T) {
 		if got != c.want {
 			t.Fatalf("Check(%s viewer document:%s)=%v want %v", c.user, c.doc, got, c.want)
 		}
+	}
+}
+
+// TestCanonicalSnapshotUsesCanonicalPrincipals proves that with canonical identity enabled,
+// the Graph connector (a) pre-provisions a principal + aliases for every directory user, and
+// (b) emits user:principal:<uuid> tuples for EVERY user reference — group membership AND
+// direct document grants — never raw mail keys. It also proves the synced principal matches
+// what the query-time resolver returns for a verified token (entra:id == Graph object id).
+func TestCanonicalSnapshotUsesCanonicalPrincipals(t *testing.T) {
+	ctx := context.Background()
+	resolver := runtime.NewMemoryPrincipalResolver()
+	conn := NewConnector(seededGraph(), Config{}, discard(), nil)
+	conn.SetCanonicalIdentity(resolver, true)
+
+	ps, err := conn.Snapshot(ctx, "tenant_demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No raw user key survives canonicalization: every user reference is "principal:<uuid>".
+	assertCanonical := func(where string, users []string) {
+		for _, u := range users {
+			if !strings.HasPrefix(u, "principal:") {
+				t.Fatalf("%s: user reference %q is not a canonical principal", where, u)
+			}
+		}
+	}
+	for _, g := range ps.Groups {
+		assertCanonical("group "+g.ID+" members", g.MemberUsers)
+	}
+	for _, f := range ps.Folders {
+		assertCanonical("folder "+f.ID+" viewers", f.ViewerUsers)
+	}
+	for _, d := range ps.Documents {
+		assertCanonical("document "+d.ID+" viewers", d.ViewerUsers)
+	}
+
+	// The synced principal for finance_user (entra:id=u-fin) is exactly what the query-time
+	// resolver returns for a verified token presenting oid=u-fin.
+	resolved, err := resolver.Resolve(ctx, "tenant_demo",
+		runtime.AssertionsFromIdentity(runtime.Identity{OID: "u-fin", Verified: true}))
+	if err != nil {
+		t.Fatalf("finance_user must resolve after sync pre-provisioned its alias: %v", err)
+	}
+	finSubject := "user:" + runtime.PrincipalUserID(resolved.ID)
+
+	fga := aclsync.NewMemoryFGA()
+	if err := fga.WriteTuples(ctx, "tenant_demo", aclsync.PermissionSetToTuples(ps)); err != nil {
+		t.Fatal(err)
+	}
+
+	// (a) GROUP MEMBERSHIP tuple uses the canonical principal; the raw mail key does not.
+	if !fga.Check("tenant_demo", finSubject, "member", "group:finance") {
+		t.Fatalf("expected %s member group:finance", finSubject)
+	}
+	if fga.Check("tenant_demo", "user:finance_user", "member", "group:finance") {
+		t.Fatal("raw user:finance_user must NOT remain a group member after canonicalization")
+	}
+	// End-to-end: finance_user (as principal) still reaches security-policy via finance-folder.
+	if !fga.Check("tenant_demo", finSubject, "viewer", "document:security-policy") {
+		t.Fatalf("expected %s viewer document:security-policy (group->folder->doc)", finSubject)
+	}
+
+	// (b) DIRECT DOCUMENT VIEWER tuple uses the canonical principal: general_user (u-gen) has a
+	// direct grant on personal-note.
+	gen, err := resolver.Resolve(ctx, "tenant_demo",
+		runtime.AssertionsFromIdentity(runtime.Identity{OID: "u-gen", Verified: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	genSubject := "user:" + runtime.PrincipalUserID(gen.ID)
+	if !fga.Check("tenant_demo", genSubject, "viewer", "document:personal-note") {
+		t.Fatalf("expected direct grant %s viewer document:personal-note", genSubject)
+	}
+	if fga.Check("tenant_demo", "user:general_user", "viewer", "document:personal-note") {
+		t.Fatal("raw user:general_user direct grant must NOT remain after canonicalization")
+	}
+}
+
+// TestNonCanonicalSnapshotUnchanged guards the demo/local path: with canonical OFF (the
+// default), the connector still emits raw user-key tuples exactly as before.
+func TestNonCanonicalSnapshotUnchanged(t *testing.T) {
+	ctx := context.Background()
+	conn := NewConnector(seededGraph(), Config{}, discard(), nil) // canonical not set -> off
+	ps, err := conn.Snapshot(ctx, "tenant_demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fga := aclsync.NewMemoryFGA()
+	if err := fga.WriteTuples(ctx, "tenant_demo", aclsync.PermissionSetToTuples(ps)); err != nil {
+		t.Fatal(err)
+	}
+	if !fga.Check("tenant_demo", "user:finance_user", "member", "group:finance") {
+		t.Fatal("non-canonical mode must keep raw user:finance_user group membership")
 	}
 }
 

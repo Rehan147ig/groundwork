@@ -25,10 +25,14 @@ var ErrIdentityInvalid = errors.New("invalid end-user identity assertion")
 // the request body.
 type Identity struct {
 	UserID   string
-	Subject  string
+	Subject  string // JWT "sub" (IdP+app-scoped for Entra; stable subject for generic OIDC)
+	OID      string // JWT "oid" (Entra directory object id; matches the Graph user id)
 	Email    string
 	Username string
 	Issuer   string
+	// EmailVerified mirrors the OIDC "email_verified" claim; email / preferred_username are
+	// only treated as verified identity aliases for principal resolution when this is true.
+	EmailVerified bool
 	// Verified is true only when UserID came from a validated signed assertion.
 	// Demo identities (ALLOW_DEMO_IDENTITY=true) are reported with Verified=false.
 	Verified bool
@@ -68,12 +72,14 @@ func (v *JWTVerifier) Verify(_ context.Context, token string) (Identity, error) 
 		return Identity{}, fmt.Errorf("%w: token has no sub/email/preferred_username claim", ErrIdentityInvalid)
 	}
 	return Identity{
-		UserID:   userID,
-		Subject:  claimString(claims, "sub"),
-		Email:    claimString(claims, "email"),
-		Username: claimString(claims, "preferred_username"),
-		Issuer:   claimString(claims, "iss"),
-		Verified: true,
+		UserID:        userID,
+		Subject:       claimString(claims, "sub"),
+		OID:           claimString(claims, "oid"),
+		Email:         claimString(claims, "email"),
+		Username:      claimString(claims, "preferred_username"),
+		Issuer:        claimString(claims, "iss"),
+		EmailVerified: claimBool(claims, "email_verified"),
+		Verified:      true,
 	}, nil
 }
 
@@ -93,6 +99,16 @@ func claimString(claims jwt.MapClaims, key string) string {
 		return strings.TrimSpace(value)
 	}
 	return ""
+}
+
+func claimBool(claims jwt.MapClaims, key string) bool {
+	switch v := claims[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	return false
 }
 
 // BuildIdentityVerifier constructs an IdentityVerifier from environment config:

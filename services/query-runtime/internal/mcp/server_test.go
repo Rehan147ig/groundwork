@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,6 +80,99 @@ func TestMCPFailsClosedWithoutVerifiedIdentity(t *testing.T) {
 	}
 	if strings.Contains(out, "sharepoint-policy") {
 		t.Fatalf("no document may be returned without a verified identity, got: %s", out)
+	}
+}
+
+// recordingACL captures the req.UserID the engine checks against, so a test can prove the
+// MCP transport canonicalized the identity before Engine.Execute. It allows every chunk so a
+// candidate always reaches the ACL stage.
+type recordingACL struct {
+	mu    sync.Mutex
+	users map[string]bool
+}
+
+func (r *recordingACL) CanAccess(_ context.Context, req runtime.QueryRequest, _ runtime.Chunk) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.users == nil {
+		r.users = map[string]bool{}
+	}
+	r.users[req.UserID] = true
+	return true, nil
+}
+
+func (r *recordingACL) saw(user string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.users[user]
+}
+
+// /mcp (and stdio, which shares executeSearch) must canonicalize the verified identity: the
+// engine should see user_id = "principal:<uuid>", not the raw token subject.
+func TestMCPUsesCanonicalIdentity(t *testing.T) {
+	t.Setenv("GROUNDWORK_JWT_HS_SECRET", "mcp-secret")
+	verifier, err := runtime.BuildIdentityVerifier()
+	if err != nil || verifier == nil {
+		t.Fatalf("build verifier: err=%v nil=%v", err, verifier == nil)
+	}
+	token := signMCP(t, "mcp-secret", "finance_user")
+
+	backend := runtime.NewMemoryBackend()
+	rec := &recordingACL{}
+	eng := &engine.Engine{
+		Config: engine.TimeoutConfig{
+			Total:        500 * time.Millisecond,
+			QdrantSearch: 100 * time.Millisecond,
+			OpenFGACheck: 150 * time.Millisecond,
+			AuditWrite:   50 * time.Millisecond,
+		},
+		Backend: engine.VectorRetrievalClient{Vector: backend.Vector},
+		ACL:     rec,
+		Auditor: engine.RuntimeTraceAuditWriter{Trace: backend.Trace},
+	}
+
+	resolver := runtime.NewMemoryPrincipalResolver()
+	resolver.Seed("tenant_demo", "p-fin", []runtime.IdentityAssertion{{Namespace: "jwt:sub", Value: "finance_user", Verified: true}})
+
+	srv := NewServer(eng, "tenant_demo", "uk", verifier, false)
+	srv.SetCanonicalIdentity(resolver, true)
+	var buf bytes.Buffer
+	srv.writer = &buf
+
+	args, _ := json.Marshal(map[string]string{"user_token": token, "question": aclQuestion})
+	srv.handleGroundworkSearch(context.Background(), 1, json.RawMessage(args))
+
+	if !rec.saw("principal:p-fin") {
+		t.Fatalf("engine must check the canonical principal, observed users=%v", rec.users)
+	}
+	if rec.saw("finance_user") {
+		t.Fatalf("raw token subject must not reach the engine when canonical identity is on, observed=%v", rec.users)
+	}
+}
+
+// /mcp with canonical identity on and an unknown verified identity must fail closed.
+func TestMCPCanonicalUnresolvedFailsClosed(t *testing.T) {
+	t.Setenv("GROUNDWORK_JWT_HS_SECRET", "mcp-secret")
+	verifier, err := runtime.BuildIdentityVerifier()
+	if err != nil || verifier == nil {
+		t.Fatalf("build verifier: err=%v nil=%v", err, verifier == nil)
+	}
+	token := signMCP(t, "mcp-secret", "nobody")
+
+	srv := NewServer(newTestEngine(), "tenant_demo", "uk", verifier, false)
+	srv.SetCanonicalIdentity(runtime.NewMemoryPrincipalResolver(), true) // empty resolver
+	var buf bytes.Buffer
+	srv.writer = &buf
+
+	args, _ := json.Marshal(map[string]string{"user_token": token, "question": aclQuestion})
+	srv.handleGroundworkSearch(context.Background(), 9, json.RawMessage(args))
+
+	out := buf.String()
+	if !strings.Contains(out, "FAIL CLOSED") || !strings.Contains(out, "identity_unresolved") {
+		t.Fatalf("expected fail-closed identity_unresolved, got: %s", out)
+	}
+	if strings.Contains(out, "sharepoint-policy") {
+		t.Fatalf("no document may be returned for an unresolved identity, got: %s", out)
 	}
 }
 

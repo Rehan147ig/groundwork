@@ -41,7 +41,15 @@ services:
       IDK_THRESHOLD: "0.70"
       VECTOR_WEIGHT: "0.60"
       KEYWORD_WEIGHT: "0.40"
+      # Cloud MCP HTTP endpoint is served on the SAME listener at POST /mcp (port 8080),
+      # authenticated with the Groundwork API key (BOOTSTRAP_API_KEY above for local dev).
+      # Local dev: allow a raw demo user_id so curl works without a signed JWT.
+      # PRODUCTION: remove ALLOW_DEMO_IDENTITY and set GROUNDWORK_JWT_HS_SECRET (or
+      # GROUNDWORK_JWT_RS_PUBLIC_KEY[_FILE]) so /mcp requires a verified identity token.
+      ALLOW_DEMO_IDENTITY: "true"
+      # GROUNDWORK_JWT_HS_SECRET: "replace-with-a-strong-secret"
     ports:
+      # Exposes REST (/v1/query, /health, /metrics) AND Cloud MCP (POST /mcp).
       - "8080:8080"
     depends_on:
       qdrant:

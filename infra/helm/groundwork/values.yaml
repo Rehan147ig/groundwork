@@ -1,0 +1,29 @@
+global:
+  residencyProfiles:
+    us:
+      allowedRegions: ["us-central1", "us-east4"]
+    eu:
+      allowedRegions: ["europe-west1", "europe-west3"]
+    uk:
+      allowedRegions: ["europe-west2"]
+
+console:
+  image: groundwork/console:latest
+  replicas: 2
+
+queryRuntime:
+  image: groundwork/query-runtime:latest
+  replicas: 3
+  queryTimeoutMs: "15000"
+  aclTimeoutMs: "120"
+  idkThreshold: "0.70"
+
+ingestion:
+  image: groundwork/ingestion:latest
+  replicas: 2
+
+security:
+  failClosed: true
+  tlsMinVersion: "1.3"
+  encryptionAtRest: "AES-256"
+  byokEnabled: true

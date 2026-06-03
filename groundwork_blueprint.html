@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Groundwork: The Master Blueprint</title>
+    <meta charset="utf-8">
+</head>
+<body>
+<xmp theme="simplex" style="display:none;">
+# GROUNDWORK
+
+## The Security Layer for AI
+
+---
+
+> *Every enterprise deploying AI agents is one misconfigured query away from a data breach.*
+> *Groundwork makes that impossible.*
+
+---
+
+## Table of Contents
+
+1. [The Crisis: AI Oversharing](#1-the-crisis-ai-oversharing)
+2. [What is Groundwork?](#2-what-is-groundwork)
+3. [Architecture: How It Works](#3-architecture-how-it-works)
+4. [The Query Lifecycle: 98 Milliseconds](#4-the-query-lifecycle-98-milliseconds)
+5. [Integration Paths](#5-integration-paths)
+6. [The Permission Engine](#6-the-permission-engine)
+7. [The Cryptographic Audit Chain](#7-the-cryptographic-audit-chain)
+8. [Resilience Engineering](#8-resilience-engineering)
+9. [The Third-Party Advantage](#9-the-third-party-advantage)
+10. [Competitive Landscape](#10-competitive-landscape)
+11. [Pricing & Business Model](#11-pricing--business-model)
+12. [Technology Stack](#12-technology-stack)
+
+---
+
+## 1. The Crisis: AI Oversharing
+
+### The Scenario
+
+A Fortune 500 bank deploys an internal AI assistant. An employee in marketing opens the chat and types:
+
+> *"Summarize the board's discussion on executive compensation from last quarter."*
+
+The AI dutifully retrieves the board minutes from the company's document store — including the CEO's salary, stock option grants, and a confidential discussion about replacing the CFO — and presents it in a neat summary.
+
+**The marketing employee was never authorized to see any of this.**
+
+### Why This Happens
+
+AI models have no concept of human permissions. A Retrieval-Augmented Generation (RAG) system retrieves documents based on **semantic relevance**, not **authorization**. If the question is semantically similar to the document, the document gets returned — regardless of who is asking.
+
+### The Scale of the Problem
+
+| Metric | Reality |
+|--------|---------|
+| Enterprises planning AI deployment by 2026 | 85%+ |
+| CISOs who say AI data leakage is their #1 concern | 68% |
+| Average cost of an internal data breach | $4.45 million |
+| Companies with proper AI access controls today | < 5% |
+
+### What CISOs Are Doing Right Now
+
+They are **blocking AI deployments entirely**. Not because AI isn't useful — but because the risk of unauthorized data exposure is too high. Every week an AI project is delayed costs the company competitive advantage.
+
+**Groundwork removes the blocker.**
+
+---
+
+## 2. What is Groundwork?
+
+Groundwork is a **Runtime Data Access Control Layer** for AI applications.
+
+It is not a chatbot. It is not a RAG framework. It is not a vector database.
+
+It is **infrastructure** — a thin, high-performance enforcement layer that sits between any AI application and the enterprise's data. Before a single word reaches the AI model, Groundwork has already:
+
+1. **Verified** the requester's identity
+2. **Retrieved** relevant documents from the vector and lexical databases
+3. **Checked** every document against the requester's live permissions
+4. **Stripped** every unauthorized document from the result set
+5. **Logged** the entire interaction in a tamper-proof audit chain
+6. **Returned** only the clean, authorized data to the AI
+
+```mermaid
+graph LR
+    subgraph WITHOUT["❌ WITHOUT GROUNDWORK"]
+        A1["AI Agent"] -->|"Search"| B1["Vector DB"]
+        B1 -->|"ALL documents\n(no permission check)"| A1
+    end
+
+    subgraph WITH["✅ WITH GROUNDWORK"]
+        A2["AI Agent"] -->|"Search"| GW["GROUNDWORK"]
+        GW -->|"Search"| B2["Vector DB"]
+        B2 -->|"50 candidates"| GW
+        GW -->|"Check permissions\nStrip unauthorized\nWrite audit log"| GW
+        GW -->|"12 PERMITTED\ndocuments only"| A2
+    end
+
+    style WITHOUT fill:#7f1d1d,color:#fff
+    style WITH fill:#14532d,color:#fff
+    style GW fill:#f59e0b,color:#000
+```
+
+### The Core Philosophy
+
+> **Permissions are enforced at query-time, not ingestion-time.**
+
+Most competing approaches tag documents with permissions when they are uploaded ("ingestion-time tagging"). This breaks immediately because:
+
+- An employee is fired at 2:00 PM → the tags say they still have access at 2:01 PM
+- A user is moved from Finance to Marketing → the old tags are stale until someone manually updates them
+- A document is re-classified from "Internal" to "Confidential" → every AI index has the old tag cached
+
+Groundwork checks the **live, current permission state** on every single query. If HR revokes Alice's access at 2:00 PM, the AI cannot retrieve Alice's documents at 2:00:01 PM.
+
+---
+
+## 3. Architecture: How It Works
+
+```mermaid
+graph TB
+    subgraph CLIENTS["AI APPLICATIONS"]
+        RAG["RAG Chatbot"]
+        AGENT["Autonomous AI Agent"]
+        MCP_CLIENT["MCP Client\n(Claude Desktop)"]
+        SDK["Python/JS SDK"]
+    end
+
+    subgraph GW["GROUNDWORK RUNTIME"]
+        direction TB
+        AUTH["Authentication\nHMAC-SHA256 API Key"]
+        ENGINE["Enforcement Engine\n(Go, Sub-100ms)"]
+        AUDIT["Audit Writer\nHash-Chained, Append-Only"]
+        CB["Circuit Breakers\nFail-Closed on Every Error"]
+        MCP_SERVER["MCP Server\n(stdio / SSE transport)"]
+    end
+
+    subgraph DATA["DATA LAYER"]
+        QDRANT["Qdrant\nVector Embeddings"]
+        ELASTIC["Elasticsearch\nLexical / BM25 Search"]
+        POSTGRES["PostgreSQL\nAPI Keys + Audit Log"]
+    end
+
+    subgraph AUTHZ["AUTHORIZATION"]
+        OPENFGA["OpenFGA\nRelationship-Based\nAccess Control (ReBAC)"]
+        IDP["Identity Provider\n(Okta / Azure AD / Google)"]
+    end
+
+    subgraph OBSERVE["OBSERVABILITY"]
+        PROM["Prometheus Metrics"]
+        GRAF["Grafana Dashboards"]
+    end
+
+    RAG & SDK -->|"REST API\nPOST /v1/query"| AUTH
+    AGENT & MCP_CLIENT -->|"MCP Protocol"| MCP_SERVER
+    MCP_SERVER --> ENGINE
+    AUTH --> ENGINE
+    ENGINE -->|"Parallel search"| QDRANT & ELASTIC
+    ENGINE -->|"Live permission\ncheck per chunk"| OPENFGA
+    ENGINE --> AUDIT --> POSTGRES
+    ENGINE -->|"Expose /metrics"| PROM --> GRAF
+    IDP -->|"Sync users\n& groups"| OPENFGA
+
+    style GW fill:#1a1a2e,color:#fff,stroke:#f59e0b
+    style DATA fill:#0f172a,color:#fff
+    style AUTHZ fill:#450a0a,color:#fff
+    style OBSERVE fill:#0c4a6e,color:#fff
+    style CLIENTS fill:#064e3b,color:#fff
+```
+
+### Key Design Decisions
+
+| Decision | Why |
+|----------|-----|
+| **Go for the runtime** | Compiles to a single binary. Sub-millisecond goroutine scheduling. No garbage collection pauses under 100μs. |
+| **OpenFGA for permissions** | Google Zanzibar-inspired ReBAC. Handles complex hierarchies (user → group → department → document) in < 10ms. |
+| **Qdrant + Elasticsearch** | Hybrid search: semantic understanding (vectors) + exact keyword matching (BM25), fused with Reciprocal Rank Fusion. |
+| **PostgreSQL for audit** | Append-only table with `CREATE RULE` that blocks `UPDATE` and `DELETE` at the database level. Even a DBA cannot tamper with logs. |
+| **Tenant isolation via API key** | `TenantID` and `Region` come from the API key, **never** from the request body. A compromised client cannot impersonate another tenant. |
+
+---
+
+## 4. The Query Lifecycle: 98 Milliseconds
+
+When an AI application calls Groundwork, here is exactly how every millisecond is spent:
+
+```mermaid
+sequenceDiagram
+    participant AI as AI Application
+    participant GW as Groundwork Engine
+    participant PG as PostgreSQL
+    participant QD as Qdrant
+    participant ES as Elasticsearch
+    participant FGA as OpenFGA
+
+    Note over AI,FGA: TOTAL BUDGET: 300ms max · TYPICAL: ~98ms
+
+    AI->>GW: POST /v1/query {user_id, question}
+    
+    rect rgb(20, 40, 20)
+        Note over GW,PG: PHASE 1 · AUTH (< 1ms)
+        GW->>PG: Lookup HMAC-SHA256(API key)
+        PG-->>GW: tenant_id, region, scopes
+    end
+
+    rect rgb(20, 20, 50)
+        Note over GW,ES: PHASE 2 · RETRIEVAL (< 50ms, parallel)
+        par Vector Search
+            GW->>QD: Semantic search (50 candidates)
+        and Lexical Search
+            GW->>ES: BM25 keyword search (50 candidates)
+        end
+        QD-->>GW: Vector results
+        ES-->>GW: Lexical results
+        Note over GW: RRF Fusion → 50 unique candidates
+    end
+
+    rect rgb(50, 20, 20)
+        Note over GW,FGA: PHASE 3 · ENFORCE (< 15ms, 10x concurrent)
+        par 10 goroutines with semaphore
+            GW->>FGA: Can user:alice view document:A?
+            GW->>FGA: Can user:alice view document:B?
+            GW->>FGA: Can user:alice view document:C?
+        end
+        FGA-->>GW: A=✅ B=❌ C=✅
+        Note over GW: 50 candidates → 12 permitted · 38 STRIPPED
+    end
+
+    rect rgb(40, 30, 10)
+        Note over GW,PG: PHASE 4 · AUDIT (< 10ms)
+        GW->>PG: INSERT audit_log (hash-chained)
+        PG-->>GW: ✅ committed
+    end
+
+    GW-->>AI: {citations: [12 clean results], trace: {...}}
+```
+
+### Latency Breakdown
+
+| Phase | Operation | Budget | Typical | Enforced By |
+|-------|-----------|--------|---------|-------------|
+| **Auth** | HMAC-SHA256 key lookup | 5ms | < 1ms | Context timeout |
+| **Embed** | Query → vector embedding | 80ms | ~20ms | Dedicated timeout |
+| **Retrieve** | Qdrant vector search | 80ms | ~45ms | Circuit breaker |
+| **Retrieve** | Elasticsearch BM25 | 80ms | ~40ms | Context timeout |
+| **Enforce** | OpenFGA permission checks (×50) | 60ms | ~15ms | Semaphore (10) + circuit breaker |
+| **Audit** | Hash-chained Postgres insert | 30ms | ~8ms | Context timeout |
+| **Total** | End-to-end | **300ms** | **~98ms** | Parent context deadline |
+
+> **IMPORTANT**
+> Every timeout is a **hard cutoff**. If any phase exceeds its budget, Groundwork does not wait — it immediately returns zero results (fail-closed) and logs the failure. The AI never receives unauthorized data, even during a system degradation.
+
+---
+
+## 5. Integration Paths
+
+Groundwork integrates with any AI application through four channels. The integration requires **zero changes** to the underlying data infrastructure.
+
+### Path 1: REST API (For RAG Pipelines & Chatbots)
+
+Any existing RAG application can call Groundwork with a single HTTP request:
+
+```python
+# Before Groundwork (dangerous — no permission checks)
+results = qdrant_client.search(query_vector, limit=50)
+
+# After Groundwork (secure — permissions enforced automatically)
+response = requests.post("https://api.groundwork.io/v1/query", 
+    headers={"X-API-Key": "gw_live_xxxxxxxxxxxx"},
+    json={"user_id": "alice@company.com", "question": "Q3 revenue forecast"}
+)
+# response.citations contains ONLY documents alice is allowed to see
+```
+
+### Path 2: MCP Server (For AI Agents — Claude, GPT, etc.)
+
+For autonomous AI Agents using the Model Context Protocol:
+
+```json
+{
+  "mcpServers": {
+    "groundwork": {
+      "command": "groundwork-mcp",
+      "args": ["--api-key", "gw_live_xxxxxxxxxxxx"],
+      "tools": [{
+        "name": "groundwork_search",
+        "description": "Search company documents with permission enforcement",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "user_id": {"type": "string"},
+            "question": {"type": "string"}
+          }
+        }
+      }]
+    }
+  }
+}
+```
+
+### Path 3: Python / JavaScript SDK
+
+```python
+from groundwork import GroundworkClient
+
+gw = GroundworkClient(api_key="gw_live_xxxxxxxxxxxx")
+results = gw.query(user_id="alice@company.com", question="Q3 revenue forecast")
+
+for citation in results.citations:
+    print(f"[{citation.document_id}] {citation.text}")
+```
+
+### Path 4: LangChain / LlamaIndex Plugin
+
+```python
+from langchain.retrievers import GroundworkRetriever
+
+retriever = GroundworkRetriever(api_key="gw_live_xxxxxxxxxxxx")
+# Drop-in replacement for any LangChain retriever
+chain = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
+```
+
+### Why Zero Performance Degradation?
+
+| Without Groundwork | With Groundwork |
+|---|---|
+| App → Vector DB → LLM | App → **Groundwork** → LLM |
+| App makes the vector search call | Groundwork makes the vector search call |
+| No permission check (0ms saved) | Permission check runs **in parallel** with retrieval |
+| No audit log | Audit log adds ~8ms |
+| **Total overhead added by Groundwork: ~15-25ms** | |
+
+The AI application was already waiting for the vector search. Groundwork performs that same search AND runs permission checks simultaneously. The net overhead is just the audit write (~8ms) and the orchestration (~5ms).
+
+---
+
+## 6. The Permission Engine
+
+### How Every Company Gets Their Own Rules
+
+Every enterprise has a different organizational structure — different departments, roles, hierarchies, and access policies. Groundwork handles this through **OpenFGA**, a Relationship-Based Access Control (ReBAC) engine inspired by Google's internal authorization system (Zanzibar).
+
+### The Two Agent Models
+
+```mermaid
+graph TB
+    subgraph COPILOT["🧑‍💼 COPILOT MODEL\nAgent acts on behalf of a human"]
+        USER1["Employee: Alice\n(Finance Team)"]
+        AGENT1["AI Assistant\n(Claude / GPT)"]
+        USER1 -->|"Alice asks a question"| AGENT1
+        AGENT1 -->|"Passes user_id: alice"| GW1["Groundwork"]
+        GW1 -->|"Checks: Can alice\nview this document?"| FGA1["OpenFGA"]
+    end
+
+    subgraph AUTONOMOUS["🤖 AUTONOMOUS MODEL\nAgent has its own identity"]
+        AGENT2["Financial Summarizer Agent\n(user_id: financial_bot)"]
+        AGENT2 -->|"Searches independently"| GW2["Groundwork"]
+        GW2 -->|"Checks: Can financial_bot\nview this document?"| FGA2["OpenFGA"]
+    end
+
+    style COPILOT fill:#1e3a5f,color:#fff
+    style AUTONOMOUS fill:#3b1f2b,color:#fff
+```
+
+**Copilot Model:** The AI inherits the human's exact permission level. If Alice can't see HR documents, neither can her AI assistant.
+
+**Autonomous Model:** The AI Agent gets its own identity with explicit, scoped permissions. A "Financial Summarizer Bot" can read financial reports but is blocked from HR data, legal documents, or engineering specs.
+
+### How Permissions Sync Automatically
+
+Groundwork connects to the enterprise's existing Identity Provider (Okta, Microsoft Entra ID, Google Workspace). When HR adds a new employee or changes someone's department, the change flows automatically:
+
+```
+HR updates Okta → Webhook fires → Groundwork writes to OpenFGA → Next AI query uses new permissions
+```
+
+No manual configuration. No stale tags. No permission drift.
+
+---
+
+## 7. The Cryptographic Audit Chain
+
+Every query that passes through Groundwork produces an immutable audit record. These records are cryptographically chained — each entry's hash includes the previous entry's hash, creating a tamper-evident sequence identical in principle to a blockchain.
+
+### What Gets Logged
+
+| Field | Example | Purpose |
+|-------|---------|---------|
+| `trace_id` | `gw_tr_a8f3c2` | Unique query identifier |
+| `tenant_id` | `acme-corp` | Which customer's data was accessed |
+| `user_id` | `alice@acme.com` | Who (or which agent) made the request |
+| `query_hash` | `sha256(question)` | What was asked (hashed, not plaintext) |
+| `candidates_retrieved` | `50` | How many documents were found |
+| `candidates_allowed` | `12` | How many passed permission checks |
+| `candidates_blocked` | `38` | How many were stripped |
+| `fail_closed` | `false` | Whether the system failed safely |
+| `circuit_breaker_state` | `closed` | Health of upstream services |
+| `immutable_digest` | `sha256(all fields)` | Tamper-detection hash |
+| `previous_hash` | `sha256(previous entry)` | Chain link to prior entry |
+
+### Why This Matters for Compliance
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│                    AUDIT LOG HASH CHAIN                          │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Entry #1          Entry #2          Entry #3                    │
+│  ┌──────────┐      ┌──────────┐      ┌──────────┐               │
+│  │ trace_id │      │ trace_id │      │ trace_id │               │
+│  │ user_id  │      │ user_id  │      │ user_id  │               │
+│  │ blocked  │      │ blocked  │      │ blocked  │               │
+│  │ ...      │      │ ...      │      │ ...      │               │
+│  │          │      │          │      │          │               │
+│  │ hash: A  │─────▶│ prev: A  │─────▶│ prev: B  │               │
+│  │          │      │ hash: B  │      │ hash: C  │               │
+│  └──────────┘      └──────────┘      └──────────┘               │
+│                                                                  │
+│  If ANY entry is modified, deleted, or inserted out of order,    │
+│  the chain breaks. Tampering is mathematically detectable.       │
+│                                                                  │
+│  PostgreSQL enforces:                                            │
+│    • CREATE RULE audit_no_update → blocks all UPDATE statements  │
+│    • CREATE RULE audit_no_delete → blocks all DELETE statements  │
+│    • Even a database admin cannot alter historical records        │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+When SOC 2 or ISO 27001 auditors arrive, the enterprise hands them the Groundwork audit chain. The auditors can independently verify that no log entry has been tampered with by recomputing the hash chain. No trust required — the math proves it.
+
+---
+
+## 8. Resilience Engineering
+
+Groundwork is designed for a single, non-negotiable guarantee:
+
+> **Under no circumstances — crash, timeout, network failure, or system overload — will Groundwork accidentally return unauthorized data.**
+
+### The Three Safety Mechanisms
+
+**1. Fail-Closed Architecture**
+
+Every error path returns **zero results**. If the vector database is slow, if OpenFGA is unreachable, if the audit log insert fails — the response is always empty. The AI receives nothing. This is the opposite of how most software works (where errors default to "allow").
+
+**2. Circuit Breakers**
+
+```mermaid
+stateDiagram-v2
+    [*] --> Closed: Normal operation
+    Closed --> Open: 3 consecutive failures
+    Open --> HalfOpen: After 10s cooldown
+    HalfOpen --> Closed: 1 success
+    HalfOpen --> Open: 1 failure
+
+    note right of Closed: All requests pass through\nFailures are counted
+    note right of Open: ALL requests instantly blocked\nUpstream service gets time to recover\nGroundwork returns fail-closed (zero results)
+    note right of HalfOpen: One test request allowed\nIf it succeeds → recover\nIf it fails → back to Open
+```
+
+If Qdrant or OpenFGA starts failing, the circuit breaker stops sending requests to the failing service. This prevents Groundwork from overwhelming a struggling dependency (avoiding cascading failures) while continuing to serve safe, empty responses.
+
+**3. Semaphore Throttling**
+
+When checking permissions for 50 document chunks, Groundwork does NOT fire 50 simultaneous requests to OpenFGA. It uses a **semaphore of 10** — meaning at most 10 permission checks run concurrently. This protects OpenFGA from being accidentally DDoS'd by Groundwork's own traffic spikes.
+
+### What Happens Under Extreme Load
+
+| Scenario | Groundwork's Response |
+|----------|----------------------|
+| 10,000 queries/second spike | Auto-scaler launches more containers. Requests queue briefly. |
+| Qdrant goes down entirely | Circuit breaker opens. All queries return fail-closed. Audit logs record the outage. |
+| OpenFGA responds in 200ms (over budget) | Timeout fires at 60ms. Chunks are blocked. Fail-closed. |
+| Audit log Postgres is full | Audit write fails → entire query fails → zero results returned. |
+| An attacker sends a malformed API key | HMAC lookup returns no match → 401 Unauthorized in < 1ms. |
+| Someone tries to DELETE audit logs via SQL | PostgreSQL `CREATE RULE` silently blocks the DELETE. Logs survive. |
+
+---
+
+## 9. The Third-Party Advantage
+
+### Why Enterprises Pay for External Security Instead of Building It
+
+**Reason 1: Liability Transfer**
+
+When a Fortune 500 company buys Groundwork, they are not just buying software — they are buying a **legal shield**.
+
+If an internal team builds a security layer and it fails:
+- The internal engineers are fired
+- The CISO's career is damaged
+- The company bears 100% of the legal and financial liability
+- The board demands answers: *"Why did we build this ourselves?"*
+
+If they use Groundwork and a failure occurs:
+- The CISO reports to the board: *"We used an industry-standard, specialized vendor"*
+- The company's **Cyber Liability Insurance** covers the damages (insurers require use of approved third-party tools)
+- The company can pursue contractual remedies against Groundwork
+- The CISO demonstrated due diligence and keeps their position
+
+> **IMPORTANT**
+> Enterprises buy Groundwork to **transfer risk off their balance sheet**. The CISO's job is not to build security tools — it's to manage risk. Buying Groundwork is a risk management decision.
+
+**Reason 2: The Math of Build vs. Buy**
+
+| | Build Internally | Buy Groundwork |
+|---|---|---|
+| Engineers needed | 3 senior (Go + Security + Infra) | 0 |
+| Engineering cost | $600,000/year | $0 |
+| Time to production | 6-9 months | 1 week integration |
+| Ongoing maintenance | Permanent team | Included |
+| SOC 2 compliant audit logs | Build from scratch | Included |
+| Circuit breakers, fail-closed | Build from scratch | Included |
+| **Annual cost** | **~$600,000+** | **$36,000 - $60,000** |
+
+**Reason 3: Independent Cryptographic Proof**
+
+External auditors (SOC 2, ISO 27001) inherently distrust homegrown security tools. They cannot verify that an internal team hasn't backdoored their own audit logs. Groundwork's hash-chained audit trail is independently verifiable — the math proves integrity, no trust required.
+
+---
+
+## 10. Competitive Landscape
+
+| Feature | Groundwork | Vectara | Pebblo (Daxa) | DIY / Homegrown |
+|---------|------------|---------|---------------|-----------------|
+| **Enforcement timing** | Live (query-time) | Ingestion-time tags | Ingestion-time scan | Varies |
+| **Permission model** | ReBAC (OpenFGA / Zanzibar) | Static metadata filters | Document classification | Custom |
+| **Database lock-in** | None (works with any vector DB) | Must use Vectara's DB | Must use their pipeline | N/A |
+| **Tamper-proof audit** | Cryptographic hash chain | Basic logging | Basic logging | Unlikely |
+| **AI Agent support (MCP)** | Native MCP Server | No | No | Manual |
+| **Fail-closed guarantee** | Yes (circuit breakers) | Varies | No | Unlikely |
+| **Latency overhead** | ~15-25ms | Platform-dependent | Ingestion-time only | Varies |
+| **Enterprise BYOC** | Yes (Helm/Terraform) | No | No | N/A |
+
+### Groundwork's Unique Position
+
+Groundwork is the only solution that combines **live query-time enforcement**, **database-agnostic integration**, **cryptographic audit trails**, and **native AI Agent (MCP) support** in a single, sub-100ms runtime.
+
+---
+
+## 11. Pricing & Business Model
+
+| Tier | Monthly | Annual | Target Customer |
+|------|---------|--------|-----------------|
+| **Growth** | $500 - $1,000 | $6,000 - $12,000 | Startups deploying internal RAG tools |
+| **Enterprise SaaS** | $3,000 - $5,000 | $36,000 - $60,000 | Mid-market to Fortune 500 |
+| **BYOC (On-Premise)** | $10,000 - $20,000+ | $120,000 - $250,000+ | Banks, Healthcare, Government, Defense |
+
+**Gross Margins:** 85-92%. Infrastructure costs are ~$250/month for the first cohort of customers. A single Enterprise SaaS contract covers the entire hosting bill for the year.
+
+---
+
+## 12. Technology Stack
+
+| Layer | Technology | Role |
+|-------|-----------|------|
+| **Runtime Engine** | Go 1.22+ | Sub-100ms enforcement, concurrent ACL checks, circuit breakers |
+| **Permission Engine** | OpenFGA (Zanzibar) | Relationship-Based Access Control with < 10ms latency |
+| **Vector Database** | Qdrant | Semantic similarity search with tenant-filtered collections |
+| **Lexical Search** | Elasticsearch | BM25 keyword matching, fused with vector results via RRF |
+| **Primary Database** | PostgreSQL | API key storage, audit log (append-only, hash-chained) |
+| **Ingestion Pipeline** | Python + FastAPI | Semantic chunking, embedding generation, dual-write to Qdrant + ES |
+| **AI Agent Protocol** | MCP (stdio/SSE) | Native integration with Claude Desktop, autonomous agents |
+| **Observability** | Prometheus + Grafana | Real-time dashboards for latency, blocked chunks, circuit state |
+| **Infrastructure** | Docker + Terraform | Reproducible deployments, BYOC-ready Helm charts |
+
+---
+
+> **Groundwork is the missing layer in the modern AI stack.**
+> 
+> It transforms AI from a terrifying liability into a safe, compliant, and auditable tool — giving enterprises the confidence to finally say "yes" to AI deployment.
+
+</xmp>
+<script src="https://cdn.jsdelivr.net/gh/Naereen/StrapDown.js/strapdown.min.js"></script>
+<!-- To render mermaid diagrams inside Strapdown -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>
+    window.onload = function() {
+        setTimeout(function() {
+            mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+            var pres = document.getElementsByTagName('pre');
+            for (var i = 0; i < pres.length; i++) {
+                if (pres[i].innerHTML.indexOf('graph') > -1 || pres[i].innerHTML.indexOf('sequenceDiagram') > -1 || pres[i].innerHTML.indexOf('stateDiagram') > -1) {
+                    var div = document.createElement('div');
+                    div.className = 'mermaid';
+                    div.innerHTML = pres[i].innerText;
+                    pres[i].parentNode.replaceChild(div, pres[i]);
+                }
+            }
+            mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+        }, 100);
+    }
+</script>
+</body>
+</html>

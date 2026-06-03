@@ -1,0 +1,7 @@
+fastembed==0.7.3
+fastapi==0.124.2
+uvicorn[standard]==0.38.0
+python-multipart==0.0.20
+qdrant-client==1.18.0
+elasticsearch==8.15.1
+requests==2.34.2

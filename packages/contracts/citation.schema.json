@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://groundwork.local/schemas/citation.schema.json",
+  "title": "Groundwork Citation",
+  "type": "object",
+  "required": ["document_id", "chunk_id", "chunk_hash", "page", "offset", "text", "freshness_score"],
+  "properties": {
+    "document_id": { "type": "string" },
+    "chunk_id": { "type": "string" },
+    "chunk_hash": { "type": "string" },
+    "page": { "type": "integer", "minimum": 1 },
+    "offset": { "type": "integer", "minimum": 0 },
+    "text": { "type": "string" },
+    "freshness_score": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

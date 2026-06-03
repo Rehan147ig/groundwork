@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: groundwork-query-runtime
+spec:
+  replicas: {{ .Values.queryRuntime.replicas }}
+  selector:
+    matchLabels:
+      app: groundwork-query-runtime
+  template:
+    metadata:
+      labels:
+        app: groundwork-query-runtime
+    spec:
+      containers:
+        - name: query-runtime
+          image: {{ .Values.queryRuntime.image }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: QUERY_TIMEOUT_MS
+              value: {{ .Values.queryRuntime.queryTimeoutMs | quote }}
+            - name: ACL_TIMEOUT_MS
+              value: {{ .Values.queryRuntime.aclTimeoutMs | quote }}
+            - name: IDK_THRESHOLD
+              value: {{ .Values.queryRuntime.idkThreshold | quote }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: groundwork-query-runtime
+spec:
+  selector:
+    app: groundwork-query-runtime
+  ports:
+    - port: 8080
+      targetPort: 8080

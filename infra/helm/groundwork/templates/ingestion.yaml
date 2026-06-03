@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: groundwork-ingestion
+spec:
+  replicas: {{ .Values.ingestion.replicas }}
+  selector:
+    matchLabels:
+      app: groundwork-ingestion
+  template:
+    metadata:
+      labels:
+        app: groundwork-ingestion
+    spec:
+      containers:
+        - name: ingestion
+          image: {{ .Values.ingestion.image }}
+          ports:
+            - containerPort: 8090
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: groundwork-ingestion
+spec:
+  selector:
+    app: groundwork-ingestion
+  ports:
+    - port: 8090
+      targetPort: 8090

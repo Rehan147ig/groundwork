@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://groundwork.local/schemas/query.schema.json",
+  "title": "Groundwork Query Request",
+  "type": "object",
+  "required": ["user_id", "question"],
+  "properties": {
+    "user_id": { "type": "string", "minLength": 1 },
+    "question": { "type": "string", "minLength": 3 },
+    "source_scopes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "idk_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.7
+    }
+  }
+}

@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type mockExecutor struct{}
@@ -26,7 +29,19 @@ func (m *mockExecutor) Execute(ctx context.Context, req QueryRequest) QueryRespo
 func newTestServer(cfg Config) *Server {
 	backend := NewMemoryBackend()
 	apiKeys := NewMemoryAPIKeyResolver("gw_test_key", TenantContext{TenantID: "tenant_demo", Region: "uk", KeyName: "test"})
-	return NewServerWithExecutor(cfg, backend, apiKeys, &mockExecutor{})
+	s := NewServerWithExecutor(cfg, backend, apiKeys, &mockExecutor{})
+	s.allowDemoIdentity = true // existing tests exercise tenant/API-key behavior under dev identity
+	return s
+}
+
+// newProdServer is a server in production identity mode: a JWT verifier is wired and
+// demo identity is OFF, so /v1/query requires a verified end-user assertion.
+func newProdServer() *Server {
+	backend := NewMemoryBackend()
+	apiKeys := NewMemoryAPIKeyResolver("gw_test_key", TenantContext{TenantID: "tenant_demo", Region: "uk", KeyName: "test"})
+	s := NewServerWithExecutor(Config{}, backend, apiKeys, &mockExecutor{})
+	s.SetIdentity(hs256Verifier("server-secret"), false)
+	return s
 }
 
 func TestQueryRejectsMissingAPIKey(t *testing.T) {
@@ -197,5 +212,100 @@ func TestQueryScopeCannotCreateAPIKey(t *testing.T) {
 
 	if adminRec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", adminRec.Code, adminRec.Body.String())
+	}
+}
+
+func TestQueryUsesVerifiedIdentityAndIgnoresBodyUserID(t *testing.T) {
+	server := newProdServer()
+	token := signHS256(t, "server-secret", jwt.MapClaims{"sub": "alice@corp.com", "exp": time.Now().Add(time.Hour).Unix()})
+
+	body := `{"user_id":"attacker","question":"q"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	req.Header.Set("X-Groundwork-User-Assertion", token)
+	rec := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"user_id":"alice@corp.com"`) {
+		t.Fatalf("expected effective user from JWT claim, got %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "attacker") {
+		t.Fatalf("forged body user_id was trusted: %s", rec.Body.String())
+	}
+}
+
+func TestQueryFailsClosedWithoutAssertion(t *testing.T) {
+	server := newProdServer()
+	body := `{"user_id":"alice","question":"q"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	rec := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 fail-closed without an identity assertion, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestQueryFailsClosedOnInvalidAssertion(t *testing.T) {
+	server := newProdServer()
+	bad := signHS256(t, "WRONG-secret", jwt.MapClaims{"sub": "alice", "exp": time.Now().Add(time.Hour).Unix()})
+
+	body := `{"question":"q"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	req.Header.Set("X-Groundwork-User-Assertion", bad)
+	rec := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 on invalid JWT, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestQueryTenantStillFromAPIKeyWithJWT(t *testing.T) {
+	server := newProdServer()
+	token := signHS256(t, "server-secret", jwt.MapClaims{"sub": "alice", "exp": time.Now().Add(time.Hour).Unix()})
+
+	body := `{"tenant_id":"attacker","region":"eu","question":"q"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	req.Header.Set("X-Groundwork-User-Assertion", token)
+	rec := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"tenant_id":"tenant_demo"`) {
+		t.Fatalf("tenant must come only from the API key, got %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "attacker") {
+		t.Fatalf("body tenant_id was trusted: %s", rec.Body.String())
+	}
+}
+
+func TestQueryDemoModeAllowsBodyUserID(t *testing.T) {
+	server := newTestServer(Config{}) // demo identity enabled
+
+	body := `{"user_id":"demo_user","question":"q"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	rec := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 in demo mode, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"user_id":"demo_user"`) {
+		t.Fatalf("demo mode should use the body user_id, got %s", rec.Body.String())
 	}
 }

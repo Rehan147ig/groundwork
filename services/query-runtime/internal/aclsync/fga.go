@@ -174,9 +174,11 @@ func viewerDocument(set map[Tuple]bool, user, document string) bool {
 // this sink only manages tuples. It is exercised against a live OpenFGA in integration
 // (not in unit tests).
 type OpenFGASink struct {
-	Endpoint  string
-	StoreName string
-	Client    *http.Client
+	Endpoint             string
+	StoreName            string
+	StoreID              string // if set, used directly (skips store lookup by name)
+	AuthorizationModelID string // optional; pinned model id included in write requests
+	Client               *http.Client
 
 	mu      sync.Mutex
 	storeID string
@@ -196,6 +198,9 @@ func NewOpenFGASink(endpoint, storeName string) *OpenFGASink {
 func (o *OpenFGASink) ensureStoreID(ctx context.Context) (string, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if o.StoreID != "" {
+		return o.StoreID, nil
+	}
 	if o.storeID != "" {
 		return o.storeID, nil
 	}
@@ -238,6 +243,9 @@ func (o *OpenFGASink) writeOrDelete(ctx context.Context, op string, tuples []Tup
 		keys = append(keys, map[string]string{"user": t.User, "relation": t.Relation, "object": t.Object})
 	}
 	body := map[string]any{op: map[string]any{"tuple_keys": keys}}
+	if o.AuthorizationModelID != "" {
+		body["authorization_model_id"] = o.AuthorizationModelID
+	}
 	return o.postJSON(ctx, "/stores/"+storeID+"/write", body, nil)
 }
 

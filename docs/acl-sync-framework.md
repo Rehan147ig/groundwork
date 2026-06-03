@@ -97,20 +97,85 @@ Run it read-only in CI/cron via `cmd/acl-sync -drift-only` (exit code 2 on drift
 
 ## Metrics / logs
 
-Structured (`log/slog`) events: `sync_started`, `sync_completed` (with `tuples_written`,
-`tuples_deleted`, `sync_duration_ms`), and `drift_detected` (with per-category counts).
+Structured (`log/slog`) events from the syncer: `sync_started`, `sync_completed` (with
+`tuples_written`, `tuples_deleted`, `sync_duration_ms`), `drift_detected` (per-category
+counts), and `acl_sync_skipped_destructive_delete` (safety guard).
 
-## Running it
+The continuous service additionally emits: `acl_sync_service_started`,
+`initial_sync_started`, `initial_sync_completed`, `permission_change_received`,
+`tuple_write_success`, `tuple_delete_success`, `drift_check_started`,
+`drift_check_completed`, `acl_sync_retry`, `acl_sync_service_stopped`.
+
+Prometheus metrics (registered via the metrics package; scrapeable when
+`ACL_SYNC_METRICS_ADDR` is set): `groundwork_acl_sync_runs_total`,
+`groundwork_acl_sync_errors_total`, `groundwork_acl_sync_drift_items`,
+`groundwork_acl_sync_duration_seconds`.
+
+## Running it: once vs. continuous (watch)
+
+`cmd/acl-sync` runs in two modes via `ACL_SYNC_MODE`:
 
 ```bash
-# Sync the mock connector into a live OpenFGA, then report drift:
-OPENFGA_URL=http://openfga:8080 go run ./services/query-runtime/cmd/acl-sync -tenant tenant_demo
+# ONCE (default, safe): one full sync, then exit.
+ACL_SYNC_MODE=once OPENFGA_API_URL=http://openfga:8080 \
+  ACL_SYNC_TENANT_ID=tenant_demo \
+  go run ./services/query-runtime/cmd/acl-sync
 
-# Read-only drift check (exit 2 if drift found):
-OPENFGA_URL=http://openfga:8080 go run ./services/query-runtime/cmd/acl-sync -drift-only
+# WATCH: initial sync, then continuously apply permission changes + periodic
+# reconcile + drift checks until SIGINT/SIGTERM.
+ACL_SYNC_MODE=watch OPENFGA_API_URL=http://openfga:8080 \
+  ACL_SYNC_INTERVAL_SECONDS=60 ACL_DRIFT_CHECK_INTERVAL_SECONDS=300 \
+  ACL_SYNC_METRICS_ADDR=:9090 \
+  go run ./services/query-runtime/cmd/acl-sync
 ```
 
-With no `OPENFGA_URL`, an in-memory sink is used (dev/demo only).
+With no `OPENFGA_API_URL`/`OPENFGA_URL`, an in-memory sink is used (dev/demo only).
+
+### Environment
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ACL_SYNC_MODE` | `once` | `once` (sync + exit) or `watch` (continuous) |
+| `ACL_SYNC_TENANT_ID` | `tenant_demo` | tenant to sync |
+| `ACL_SYNC_INTERVAL_SECONDS` | `60` | periodic full reconcile (watch) |
+| `ACL_DRIFT_CHECK_INTERVAL_SECONDS` | `300` | periodic drift check (watch) |
+| `ACL_CONNECTOR_TYPE` | `mock` | source connector (only `mock` today) |
+| `OPENFGA_API_URL` (or `OPENFGA_URL`) | — | OpenFGA endpoint; unset → in-memory sink |
+| `OPENFGA_STORE_ID` | — | store id (else resolved by name) |
+| `OPENFGA_STORE_NAME` | `groundwork_local` | store name |
+| `OPENFGA_AUTHORIZATION_MODEL_ID` | — | pin a model id on writes |
+| `ACL_SYNC_METRICS_ADDR` | — | expose Prometheus `/metrics` (e.g. `:9090`) |
+
+### How revocation propagates
+
+Two paths, both fail-safe:
+
+1. **Change events (fast):** a revocation arrives via `WatchPermissionChanges` and is
+   applied as a targeted tuple **delete** (an explicit revocation → safe to delete).
+2. **Periodic reconcile (convergent):** the full snapshot diff deletes any tuple the
+   source no longer grants.
+
+Either way, the next query-time OpenFGA check denies the revoked user.
+
+### Drift detection on interval
+
+In watch mode, drift is checked every `ACL_DRIFT_CHECK_INTERVAL_SECONDS`, reported via
+logs and the `groundwork_acl_sync_drift_items` gauge — without mutating anything.
+
+### Retry / backoff and the destructive-delete guard
+
+Sync and change-apply operations retry with **exponential backoff + jitter** and never
+crash on a transient OpenFGA outage — they keep retrying until success or shutdown.
+**Deletes are refused on an empty/unconfirmed snapshot** (`AllowEmptyDestructive=false`),
+so a connector outage returning nothing can never wipe existing permissions.
+
+### Production warning
+
+The mock connector is credential-free. **Real connectors (Microsoft Graph, Okta, Google)
+require source credentials — protect them.** Inject them via your secret manager /
+Kubernetes secrets, never commit them, scope them least-privilege (read-only directory +
+permission scopes), and rotate them. Run the sync service as its own workload with only
+the access it needs to read source permissions and write OpenFGA tuples.
 
 ## Limitations of the mock connector
 

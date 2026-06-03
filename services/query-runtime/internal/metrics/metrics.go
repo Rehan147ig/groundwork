@@ -41,6 +41,27 @@ var (
 		[]string{"tenant_id"},
 	)
 
+	ACLSyncRunsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "groundwork_acl_sync_runs_total", Help: "Total ACL sync runs"},
+		[]string{"tenant_id"},
+	)
+	ACLSyncErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "groundwork_acl_sync_errors_total", Help: "Total ACL sync errors"},
+		[]string{"tenant_id"},
+	)
+	ACLSyncDriftItems = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "groundwork_acl_sync_drift_items", Help: "Drift item count from the last drift check"},
+		[]string{"tenant_id"},
+	)
+	ACLSyncDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "groundwork_acl_sync_duration_seconds",
+			Help:    "ACL sync run duration",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"tenant_id"},
+	)
+
 	registerOnce sync.Once
 )
 
@@ -53,6 +74,10 @@ func RegisterAll() {
 			CircuitBreakerState,
 			OpenFGAUnreachable,
 			TenantQueryLatency,
+			ACLSyncRunsTotal,
+			ACLSyncErrorsTotal,
+			ACLSyncDriftItems,
+			ACLSyncDuration,
 		)
 	})
 }
@@ -82,4 +107,20 @@ func RecordOpenFGAUnreachable(tenantID string) {
 
 func RecordQueryLatency(tenantID string, duration time.Duration) {
 	TenantQueryLatency.WithLabelValues(tenantID).Observe(duration.Seconds())
+}
+
+func RecordACLSyncRun(tenantID string) {
+	ACLSyncRunsTotal.WithLabelValues(tenantID).Inc()
+}
+
+func RecordACLSyncError(tenantID string) {
+	ACLSyncErrorsTotal.WithLabelValues(tenantID).Inc()
+}
+
+func SetACLSyncDriftItems(tenantID string, count int) {
+	ACLSyncDriftItems.WithLabelValues(tenantID).Set(float64(count))
+}
+
+func RecordACLSyncDuration(tenantID string, duration time.Duration) {
+	ACLSyncDuration.WithLabelValues(tenantID).Observe(duration.Seconds())
 }

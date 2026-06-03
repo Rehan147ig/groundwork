@@ -107,11 +107,18 @@ func main() {
 		return
 	}
 
-	// HTTP mode: run as REST API server
+	// HTTP mode: REST API + the Cloud MCP endpoint (/mcp) on the same listener. Both
+	// reuse the single engine `core`; /mcp authenticates with the same API key resolver.
 	server := runtime.NewServerWithExecutor(cfg, backend, apiKeys, core)
 	server.SetIdentity(identityVerifier, allowDemoIdentity)
-	log.Printf("groundwork query runtime listening on %s", cfg.Addr)
-	if err := http.ListenAndServe(cfg.Addr, server.Routes()); err != nil {
+
+	mcpHTTP := mcp.NewHTTPServer(core, apiKeys, identityVerifier, allowDemoIdentity)
+	root := http.NewServeMux()
+	root.Handle("/", server.Routes())
+	root.Handle("/mcp", mcpHTTP)
+
+	log.Printf("groundwork query runtime listening on %s (REST + Cloud MCP at POST /mcp)", cfg.Addr)
+	if err := http.ListenAndServe(cfg.Addr, root); err != nil {
 		log.Fatal(err)
 	}
 }

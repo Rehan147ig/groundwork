@@ -132,24 +132,61 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) handleRequest(ctx context.Context, req jsonrpcRequest) {
-	switch req.Method {
-	case "initialize":
-		s.handleInitialize(req)
-	case "initialized":
-		// Client acknowledgement — no response needed
-	case "tools/list":
-		s.handleToolsList(req)
-	case "tools/call":
-		s.handleToolsCall(ctx, req)
-	case "ping":
-		s.sendResult(req.ID, map[string]string{})
-	default:
-		s.sendError(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
+	// stdio transport: tenant/region come from the process's bootstrap context, and the
+	// identity token (if any) travels inside the tool arguments (no out-of-band header).
+	if resp, ok := s.dispatch(ctx, s.tenantID, s.region, "", req); ok {
+		s.send(resp)
 	}
 }
 
-func (s *Server) handleInitialize(req jsonrpcRequest) {
-	s.sendResult(req.ID, mcpInitializeResult{
+// dispatch executes a single JSON-RPC request against the shared MCP tool registry
+// and the one Engine.Execute path, returning the response and whether one should be
+// sent (notifications such as "initialized" produce no response). It is
+// transport-agnostic: both the stdio loop and the HTTP /mcp endpoint call it.
+//
+// tenantID/region are supplied by the transport from the API-key context and are NEVER
+// taken from the caller's arguments. assertionToken is an out-of-band identity token
+// (e.g. the X-Groundwork-User-Assertion HTTP header) that, when present, takes
+// precedence over the user_token tool argument.
+func (s *Server) dispatch(ctx context.Context, tenantID, region, assertionToken string, req jsonrpcRequest) (jsonrpcResponse, bool) {
+	switch req.Method {
+	case "initialize":
+		return okResponse(req.ID, initializeResult()), true
+	case "initialized":
+		// Client acknowledgement — no response.
+		return jsonrpcResponse{}, false
+	case "tools/list":
+		return okResponse(req.ID, map[string]any{"tools": groundworkTools()}), true
+	case "tools/call":
+		var params mcpToolCallParams
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return errResponse(req.ID, -32602, "invalid params"), true
+		}
+		if params.Name != "groundwork_search" {
+			return errResponse(req.ID, -32602, fmt.Sprintf("unknown tool: %s", params.Name)), true
+		}
+		result, rpcErr := s.executeSearch(ctx, tenantID, region, assertionToken, params.Arguments)
+		if rpcErr != nil {
+			return jsonrpcResponse{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}, true
+		}
+		return okResponse(req.ID, result), true
+	case "ping":
+		return okResponse(req.ID, map[string]string{}), true
+	default:
+		return errResponse(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method)), true
+	}
+}
+
+func okResponse(id any, result any) jsonrpcResponse {
+	return jsonrpcResponse{JSONRPC: "2.0", ID: id, Result: result}
+}
+
+func errResponse(id any, code int, message string) jsonrpcResponse {
+	return jsonrpcResponse{JSONRPC: "2.0", ID: id, Error: &jsonrpcError{Code: code, Message: message}}
+}
+
+func initializeResult() mcpInitializeResult {
+	return mcpInitializeResult{
 		ProtocolVersion: "2024-11-05",
 		Capabilities: map[string]any{
 			"tools": map[string]any{},
@@ -158,11 +195,11 @@ func (s *Server) handleInitialize(req jsonrpcRequest) {
 			Name:    "groundwork",
 			Version: "1.0.0",
 		},
-	})
+	}
 }
 
-func (s *Server) handleToolsList(req jsonrpcRequest) {
-	tools := []mcpTool{
+func groundworkTools() []mcpTool {
+	return []mcpTool{
 		{
 			Name:        "groundwork_search",
 			Description: "Search enterprise documents with live permission enforcement. Returns only documents the specified user is authorized to view. All unauthorized documents are automatically stripped and the interaction is cryptographically logged.",
@@ -186,70 +223,81 @@ func (s *Server) handleToolsList(req jsonrpcRequest) {
 			},
 		},
 	}
-	s.sendResult(req.ID, map[string]any{"tools": tools})
 }
 
-func (s *Server) handleToolsCall(ctx context.Context, req jsonrpcRequest) {
-	var params mcpToolCallParams
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		s.sendError(req.ID, -32602, "invalid params")
+// handleGroundworkSearch is the stdio convenience wrapper retained for the stdio
+// transport and unit tests; it delegates to the shared executeSearch path.
+func (s *Server) handleGroundworkSearch(ctx context.Context, id any, rawArgs json.RawMessage) {
+	result, rpcErr := s.executeSearch(ctx, s.tenantID, s.region, "", rawArgs)
+	if rpcErr != nil {
+		s.sendError(id, rpcErr.Code, rpcErr.Message)
 		return
 	}
-
-	switch params.Name {
-	case "groundwork_search":
-		s.handleGroundworkSearch(ctx, req.ID, params.Arguments)
-	default:
-		s.sendError(req.ID, -32602, fmt.Sprintf("unknown tool: %s", params.Name))
-	}
+	s.sendResult(id, result)
 }
 
-func (s *Server) handleGroundworkSearch(ctx context.Context, id any, rawArgs json.RawMessage) {
+// executeSearch resolves identity, runs the query through the single Engine.Execute
+// path, and formats the MCP tool result. It is shared by every transport.
+//
+// tenantID/region are provided by the transport from the API-key context. assertionToken,
+// when non-empty, is an out-of-band identity token (e.g. the X-Groundwork-User-Assertion
+// HTTP header) that takes precedence over the user_token tool argument. It returns a
+// protocol error only for malformed arguments; identity/authorization failures are
+// returned as a fail-closed tool result (IsError) with no documents.
+func (s *Server) executeSearch(ctx context.Context, tenantID, region, assertionToken string, rawArgs json.RawMessage) (mcpToolResult, *jsonrpcError) {
 	var args groundworkSearchArgs
 	if err := json.Unmarshal(rawArgs, &args); err != nil {
-		s.sendError(id, -32602, "invalid arguments: question (and a verified user_token) are required")
-		return
+		return mcpToolResult{}, &jsonrpcError{Code: -32602, Message: "invalid arguments: question (and a verified user_token) are required"}
 	}
 	if args.Question == "" {
-		s.sendError(id, -32602, "question is required")
-		return
+		return mcpToolResult{}, &jsonrpcError{Code: -32602, Message: "question is required"}
 	}
 
-	// Effective end-user identity. A signed user_token is always verified and becomes
-	// the effective user; the raw user_id is honored only in demo mode. Fail closed on
-	// a missing/invalid/expired/unsigned assertion. Tenant/region come from the MCP
-	// process's API-key-derived context, never from the caller-supplied arguments.
-	identity, err := runtime.ResolveEffectiveIdentity(ctx, s.verifier, s.allowDemo, args.UserToken, args.UserID)
+	// An out-of-band assertion token (HTTP header) wins over the in-arguments token.
+	token := assertionToken
+	if token == "" {
+		token = args.UserToken
+	}
+
+	// A signed token is always verified and becomes the effective user; the raw user_id
+	// is honored only in demo mode. Fail closed on a missing/invalid/expired/unsigned
+	// assertion. Tenant/region come from the API-key context, never from the arguments.
+	identity, err := runtime.ResolveEffectiveIdentity(ctx, s.verifier, s.allowDemo, token, args.UserID)
 	if err != nil {
-		s.sendResult(id, mcpToolResult{
+		return mcpToolResult{
 			Content: []mcpContent{{
 				Type: "text",
 				Text: fmt.Sprintf("FAIL CLOSED: a verified end-user identity is required. %v\n\nNo query was executed and no documents were returned.", err),
 			}},
 			IsError: true,
-		})
-		return
+		}, nil
 	}
 
-	// Build the query request with tenant context from the MCP server config. The
-	// effective user comes from the verified identity, never from the raw arguments.
 	queryReq := runtime.QueryRequest{
-		TenantID: s.tenantID,
-		Region:   s.region,
+		TenantID: tenantID,
+		Region:   region,
 		UserID:   identity.UserID,
 		Question: args.Question,
 	}
 
-	// Execute through the Groundwork Engine (with full ACL, circuit breakers, audit)
+	// Execute through the Groundwork Engine (with full ACL, circuit breakers, audit).
 	resp := s.engine.Execute(ctx, queryReq)
 
-	// Format the response for the AI agent
-	var resultText string
+	isError := len(resp.Citations) == 0 && resp.Trace.FailureStage != ""
+	return mcpToolResult{
+		Content: []mcpContent{{Type: "text", Text: formatSearchResult(resp)}},
+		IsError: isError,
+	}, nil
+}
+
+// formatSearchResult renders the engine response as MCP tool text, identical across
+// transports (enforce, shadow, and denied/fail-closed cases).
+func formatSearchResult(resp runtime.QueryResponse) string {
 	switch {
 	case resp.Trace.ShadowMode:
 		// Observe-only: return what the agent receives today, but flag the chunks
 		// Groundwork would strip once enforcement is switched on.
-		resultText = fmt.Sprintf(
+		resultText := fmt.Sprintf(
 			"SHADOW MODE (observe-only, no enforcement): returning %d document(s) the agent receives today.\nGroundwork WOULD BLOCK %d of these once enforcement is switched on.\n\n",
 			len(resp.Citations),
 			resp.Trace.WouldBlockByACL,
@@ -277,8 +325,9 @@ func (s *Server) handleGroundworkSearch(ctx context.Context, id any, rawArgs jso
 			resp.Trace.BlockedByResidency,
 			resp.Trace.DecisionMode,
 		)
+		return resultText
 	case len(resp.Citations) == 0:
-		resultText = fmt.Sprintf(
+		return fmt.Sprintf(
 			"ACCESS DENIED or NO RESULTS: %s\n\nTrace: %s | Decision: %s | Blocked by ACL: %d | Blocked by Region: %d",
 			resp.Answer,
 			resp.Trace.TraceID,
@@ -287,7 +336,7 @@ func (s *Server) handleGroundworkSearch(ctx context.Context, id any, rawArgs jso
 			resp.Trace.BlockedByResidency,
 		)
 	default:
-		resultText = fmt.Sprintf("Found %d permitted documents (confidence: %.2f):\n\n", len(resp.Citations), resp.Confidence)
+		resultText := fmt.Sprintf("Found %d permitted documents (confidence: %.2f):\n\n", len(resp.Citations), resp.Confidence)
 		for i, citation := range resp.Citations {
 			resultText += fmt.Sprintf(
 				"[%d] Document: %s | Chunk: %s | Score: %.3f\n%s\n\n",
@@ -301,13 +350,8 @@ func (s *Server) handleGroundworkSearch(ctx context.Context, id any, rawArgs jso
 			resp.Trace.BlockedByResidency,
 			resp.Trace.DecisionMode,
 		)
+		return resultText
 	}
-
-	isError := len(resp.Citations) == 0 && resp.Trace.FailureStage != ""
-	s.sendResult(id, mcpToolResult{
-		Content: []mcpContent{{Type: "text", Text: resultText}},
-		IsError: isError,
-	})
 }
 
 // --- Transport helpers ---

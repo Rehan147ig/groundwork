@@ -34,6 +34,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"groundwork/query-runtime/internal/aclsync"
+	"groundwork/query-runtime/internal/aclsync/msgraph"
 	"groundwork/query-runtime/internal/metrics"
 )
 
@@ -52,8 +53,30 @@ func main() {
 	switch connectorType {
 	case "mock":
 		connector = aclsync.NewMockConnector()
+	case "msgraph":
+		if os.Getenv("MS_GRAPH_CONNECTOR_ENABLED") != "true" {
+			logger.Error("msgraph connector selected but MS_GRAPH_CONNECTOR_ENABLED is not 'true'")
+			os.Exit(1)
+		}
+		graphCfg := msgraph.Config{
+			TenantID:         os.Getenv("MS_GRAPH_TENANT_ID"),
+			ClientID:         os.Getenv("MS_GRAPH_CLIENT_ID"),
+			ClientSecret:     os.Getenv("MS_GRAPH_CLIENT_SECRET"),
+			SiteID:           os.Getenv("MS_GRAPH_SITE_ID"),
+			DriveID:          os.Getenv("MS_GRAPH_DRIVE_ID"),
+			AuthorityHost:    os.Getenv("MS_GRAPH_AUTHORITY_HOST"),
+			DeltaPollSeconds: envInt("ACL_SYNC_INTERVAL_SECONDS", 60),
+			Enabled:          true,
+		}
+		var deltaStore msgraph.DeltaTokenStore = msgraph.NewMemoryDeltaTokenStore()
+		if dir := os.Getenv("ACL_DELTA_TOKEN_DIR"); dir != "" {
+			deltaStore = msgraph.NewFileDeltaTokenStore(dir)
+		}
+		// Secrets are never logged; only non-sensitive identifiers.
+		connector = msgraph.NewConnector(msgraph.NewHTTPGraphClient(graphCfg), graphCfg, logger, deltaStore)
+		logger.Info("acl-sync using Microsoft Graph connector", "site_id", graphCfg.SiteID, "drive_id", graphCfg.DriveID)
 	default:
-		logger.Error("unsupported connector type (only 'mock' is available in this milestone)", "type", connectorType)
+		logger.Error("unsupported connector type", "type", connectorType, "supported", "mock|msgraph")
 		os.Exit(1)
 	}
 

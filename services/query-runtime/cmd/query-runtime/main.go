@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"groundwork/query-runtime/internal/engine"
 	"groundwork/query-runtime/internal/mcp"
 	"groundwork/query-runtime/internal/runtime"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
@@ -53,17 +56,27 @@ func main() {
 	}
 	defer closeAPIKeys()
 
+	// Audit ledger: synchronous, append-only, tamper-evident. With DATABASE_URL set,
+	// every query writes to the immutable Postgres audit_log (hash-chained); otherwise
+	// an in-memory trace store is used for local/dev. The engine writes the entry
+	// synchronously before returning and fails closed if the write fails.
+	auditor, closeAudit, err := buildAuditWriter(cfg.DatabaseURL, backend)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer closeAudit()
+
 	core := &engine.Engine{
 		Config: engine.TimeoutConfig{
 			Total:        cfg.QueryTimeout,
 			Embedding:    cfg.EmbeddingTimeout,
 			QdrantSearch: envDuration("QDRANT_TIMEOUT_MS", 15*time.Second),
 			OpenFGACheck: cfg.OpenFGATimeout,
-			AuditWrite:   envDuration("AUDIT_TIMEOUT_MS", 30*time.Millisecond),
+			AuditWrite:   envDuration("AUDIT_TIMEOUT_MS", auditTimeoutDefault(cfg.DatabaseURL)),
 		},
 		Backend: engine.VectorRetrievalClient{Vector: backend.Vector},
 		ACL:     backend.ACL,
-		Auditor: engine.RuntimeTraceAuditWriter{Trace: backend.Trace},
+		Auditor: auditor,
 		// Observe-only mode for safe enterprise onboarding: evaluate permissions and
 		// log what WOULD be blocked, but do not strip. Tenant/region stay enforced.
 		ShadowMode: os.Getenv("GROUNDWORK_SHADOW_MODE") == "true",
@@ -144,4 +157,27 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(parsed) * time.Millisecond
+}
+
+// buildAuditWriter selects the audit sink: the immutable Postgres ledger when
+// DATABASE_URL is set, otherwise the in-memory trace store for local/dev.
+func buildAuditWriter(databaseURL string, backend runtime.Backend) (engine.AuditWriter, func(), error) {
+	if databaseURL == "" {
+		return engine.RuntimeTraceAuditWriter{Trace: backend.Trace}, func() {}, nil
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return engine.NewPostgresAuditWriter(db), func() { _ = db.Close() }, nil
+}
+
+// auditTimeoutDefault gives the synchronous audit write a realistic budget: a tight
+// 30ms for the in-memory store, but a larger window for a real Postgres round-trip
+// (which holds a per-tenant advisory lock). Override with AUDIT_TIMEOUT_MS.
+func auditTimeoutDefault(databaseURL string) time.Duration {
+	if databaseURL != "" {
+		return 2 * time.Second
+	}
+	return 30 * time.Millisecond
 }

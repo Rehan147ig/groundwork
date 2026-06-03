@@ -337,6 +337,18 @@ func auditEntryFromTrace(trace runtime.RuntimeTrace, req runtime.QueryRequest) A
 	if failClosed && blocked == 0 {
 		blocked = trace.VectorCandidates
 	}
+	// Summarize the ACL outcome and reason for the audit record. Per-chunk decisions
+	// live on the trace; the ledger row captures the query-level decision.
+	aclDecision := "allowed"
+	reason := "allowed"
+	switch {
+	case failClosed:
+		aclDecision = "fail_closed"
+		reason = trace.ErrorCode
+	case trace.RerankedCandidates == 0:
+		aclDecision = "denied"
+		reason = firstBlockedReason(trace.AccessDecisions)
+	}
 	return AuditEntry{
 		TraceID:             trace.TraceID,
 		TenantID:            trace.TenantID,
@@ -353,7 +365,24 @@ func auditEntryFromTrace(trace runtime.RuntimeTrace, req runtime.QueryRequest) A
 		ErrorMessage:        trace.ErrorMessage,
 		TotalLatencyMs:      int(trace.LatencyMs),
 		CircuitBreakerState: "closed",
+		DecisionMode:        trace.DecisionMode,
+		ACLDecision:         aclDecision,
+		Reason:              reason,
 	}
+}
+
+// firstBlockedReason returns the reason of the first non-allowed access decision,
+// used to summarize why a query returned no permitted chunks.
+func firstBlockedReason(decisions []runtime.AccessDecision) string {
+	for _, decision := range decisions {
+		if !decision.Allowed {
+			if decision.Reason != "" {
+				return decision.Reason
+			}
+			return "denied"
+		}
+	}
+	return "no_results"
 }
 
 func hashText(value string) string {

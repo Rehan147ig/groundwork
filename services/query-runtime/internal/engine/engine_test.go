@@ -354,6 +354,75 @@ func TestExecuteShadowModeStillBlocksCrossTenant(t *testing.T) {
 	}
 }
 
+type capturingAudit struct{ entries []AuditEntry }
+
+func (c *capturingAudit) Write(_ context.Context, entry AuditEntry) error {
+	c.entries = append(c.entries, entry)
+	return nil
+}
+
+func TestAuditAllowedQueryWritesEntry(t *testing.T) {
+	audit := &capturingAudit{}
+	e := Engine{Config: testTimeouts(), Backend: fakeRetrieval{candidates: testCandidates(1)}, ACL: slowACL{allowed: true}, Auditor: audit}
+
+	resp := e.Execute(context.Background(), runtime.QueryRequest{TenantID: "acme", Region: "US", UserID: "finance_user", Question: "policy"})
+
+	if len(resp.Citations) == 0 {
+		t.Fatalf("expected an allowed citation, got %+v", resp)
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("expected exactly one audit entry, got %d", len(audit.entries))
+	}
+	got := audit.entries[0]
+	if got.ACLDecision != "allowed" || got.CandidatesAllowed == 0 || got.FailClosed {
+		t.Fatalf("unexpected allowed audit entry: %+v", got)
+	}
+	if got.UserID != "finance_user" || got.TenantID != "acme" || got.QueryHash == "" || got.TraceID == "" {
+		t.Fatalf("audit entry missing required fields: %+v", got)
+	}
+}
+
+func TestAuditDeniedQueryWritesEntry(t *testing.T) {
+	audit := &capturingAudit{}
+	e := Engine{Config: testTimeouts(), Backend: fakeRetrieval{candidates: testCandidates(1)}, ACL: slowACL{allowed: false}, Auditor: audit}
+
+	resp := e.Execute(context.Background(), runtime.QueryRequest{TenantID: "acme", Region: "US", UserID: "general_user", Question: "policy"})
+
+	if len(resp.Citations) != 0 {
+		t.Fatalf("expected denial (no citations), got %+v", resp.Citations)
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("expected exactly one audit entry, got %d", len(audit.entries))
+	}
+	got := audit.entries[0]
+	if got.ACLDecision != "denied" || got.CandidatesBlocked == 0 || got.Reason == "" {
+		t.Fatalf("unexpected denied audit entry: %+v", got)
+	}
+}
+
+func TestAuditFailClosedQueryWritesEntry(t *testing.T) {
+	audit := &capturingAudit{}
+	e := Engine{
+		Config:  TimeoutConfig{Total: 300 * time.Millisecond, QdrantSearch: 20 * time.Millisecond, OpenFGACheck: 60 * time.Millisecond, AuditWrite: 30 * time.Millisecond},
+		Backend: slowRetrieval{delay: 80 * time.Millisecond},
+		ACL:     slowACL{allowed: true},
+		Auditor: audit,
+	}
+
+	resp := e.Execute(context.Background(), runtime.QueryRequest{TenantID: "acme", Region: "US", UserID: "finance_user", Question: "policy"})
+
+	if resp.Trace.FailureStage == "" {
+		t.Fatalf("expected fail-closed, got %+v", resp.Trace)
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("expected exactly one audit entry for fail-closed, got %d", len(audit.entries))
+	}
+	got := audit.entries[0]
+	if !got.FailClosed || got.ACLDecision != "fail_closed" || got.DecisionMode != "engine_fail_closed" {
+		t.Fatalf("unexpected fail-closed audit entry: %+v", got)
+	}
+}
+
 func testEngineWithACL(allowed bool) Engine {
 	return Engine{
 		Config:  testTimeouts(),
@@ -423,16 +492,22 @@ func auditTestDB(t *testing.T) *sql.DB {
 
 func installAuditMigration(t *testing.T, db *sql.DB) {
 	t.Helper()
-	sqlText, err := os.ReadFile("../../../../migrations/003_create_audit_log.up.sql")
-	if err != nil {
-		sqlText, err = os.ReadFile("../../../migrations/003_create_audit_log.up.sql")
-	}
-	if err != nil {
-		t.Fatalf("read audit migration: %v", err)
-	}
 	_, _ = db.Exec(`DROP TABLE IF EXISTS audit_log CASCADE`)
-	if _, err := db.Exec(string(sqlText)); err != nil {
-		t.Fatalf("execute audit migration: %v", err)
+	for _, name := range []string{
+		"003_create_audit_log.up.sql",
+		"004_add_previous_hash.up.sql",
+		"005_add_audit_decision_columns.up.sql",
+	} {
+		sqlText, err := os.ReadFile("../../../../migrations/" + name)
+		if err != nil {
+			sqlText, err = os.ReadFile("../../../migrations/" + name)
+		}
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
+		}
+		if _, err := db.Exec(string(sqlText)); err != nil {
+			t.Fatalf("execute migration %s: %v", name, err)
+		}
 	}
 }
 

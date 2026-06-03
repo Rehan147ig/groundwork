@@ -1,0 +1,234 @@
+# Groundwork — PRODUCTION (non-bypassable) Docker Compose profile.
+#
+# Goal: Groundwork is the ONLY externally reachable path to AI retrieval. The only
+# service that publishes a host port is the reverse-proxy `gateway`. query-runtime,
+# console, ingestion, and every backend (Qdrant, OpenFGA, PostgreSQL, Elasticsearch,
+# MinIO) are reachable only on the internal Docker network by service name — they have
+# NO host port mappings, so they are not reachable from the host's public interface.
+#
+# This file does NOT replace infra/docker-compose.yml (the dev profile, which may
+# expose backend ports for debugging). Use this one for production-like runs:
+#
+#   GROUNDWORK_BOOTSTRAP_API_KEY=gw_live_xxx \
+#   GROUNDWORK_JWT_HS_SECRET=...            \
+#   docker compose -f infra/docker-compose.prod.yml up --build
+#
+# Validate with scripts/validate-non-bypassable.sh (or .ps1).
+
+services:
+  # The ONLY public ingress. Everything external goes through here; it forwards the
+  # Groundwork allow-list of paths to query-runtime over the internal network.
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - query-runtime
+    ports:
+      # Public HTTP (and HTTPS once you terminate TLS here or upstream). This is the
+      # ONLY host-published port in the production profile.
+      - "${GATEWAY_HTTP_PORT:-80}:80"
+      # - "443:443"   # enable with a TLS cert mounted into the gateway
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - groundwork
+
+  query-runtime:
+    build:
+      context: ../services/query-runtime
+    restart: unless-stopped
+    # NOTE: no `ports:` — query-runtime is reachable only via the gateway.
+    expose:
+      - "8080"
+    environment:
+      QUERY_RUNTIME_ADDR: ":8080"
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: groundwork_chunks
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_INDEX: groundwork_chunks
+      EMBEDDING_URL: http://ingestion:8000
+      QUERY_TIMEOUT_MS: "15000"
+      ACL_TIMEOUT_MS: "500"
+      BACKEND_HTTP_TIMEOUT_MS: "15000"
+      EMBEDDING_TIMEOUT_MS: "15000"
+      QDRANT_TIMEOUT_MS: "15000"
+      QDRANT_CIRCUIT_FAILURE_LIMIT: "3"
+      QDRANT_CIRCUIT_OPEN_TIMEOUT_MS: "10000"
+      QDRANT_CIRCUIT_HALF_OPEN_LIMIT: "1"
+      OPENFGA_URL: http://openfga:8080
+      OPENFGA_STORE_NAME: groundwork_local
+      OPENFGA_TIMEOUT_MS: "500"
+      # Immutable, hash-chained audit ledger (synchronous, fail-closed on write error).
+      DATABASE_URL: postgres://groundwork:groundwork@postgres:5432/groundwork?sslmode=disable
+      # Secrets MUST be supplied (compose fails fast if missing). Never commit real values.
+      BOOTSTRAP_API_KEY: ${GROUNDWORK_BOOTSTRAP_API_KEY:?set GROUNDWORK_BOOTSTRAP_API_KEY}
+      BOOTSTRAP_TENANT_ID: ${GROUNDWORK_BOOTSTRAP_TENANT_ID:-acme}
+      BOOTSTRAP_TENANT_REGION: ${GROUNDWORK_BOOTSTRAP_TENANT_REGION:-US}
+      # PRODUCTION IDENTITY: a verified OIDC/JWT is required for every query. ALLOW_DEMO_IDENTITY
+      # is intentionally NOT set here, so a raw user_id is never trusted in production.
+      GROUNDWORK_JWT_HS_SECRET: ${GROUNDWORK_JWT_HS_SECRET:?set GROUNDWORK_JWT_HS_SECRET or switch to GROUNDWORK_JWT_RS_PUBLIC_KEY}
+      # GROUNDWORK_JWT_ISSUER: https://your-idp/
+      # GROUNDWORK_JWT_AUDIENCE: groundwork
+      IDK_THRESHOLD: "0.70"
+      VECTOR_WEIGHT: "0.60"
+      KEYWORD_WEIGHT: "0.40"
+    depends_on:
+      qdrant:
+        condition: service_started
+      elasticsearch:
+        condition: service_started
+      openfga:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    networks:
+      - groundwork
+
+  # Optional CISO console. Reachable only via the gateway (/console). To enable, build
+  # the Next.js app with basePath '/console' (or host it on a dedicated subdomain) and
+  # uncomment the /console block in nginx/nginx.conf.
+  console:
+    build:
+      context: ..
+      dockerfile: apps/console/Dockerfile
+    restart: unless-stopped
+    # NOTE: no `ports:` — reachable only via the gateway.
+    expose:
+      - "3000"
+    environment:
+      QUERY_RUNTIME_URL: http://query-runtime:8080
+      INGESTION_RUNTIME_URL: http://ingestion:8000
+      NEXT_PUBLIC_APP_NAME: Groundwork
+    depends_on:
+      - query-runtime
+    networks:
+      - groundwork
+
+  # Document ingestion. Internal only — never publicly exposed.
+  ingestion:
+    build:
+      context: ../services/ingestion
+    restart: unless-stopped
+    # NOTE: no `ports:` — internal network only.
+    expose:
+      - "8000"
+    environment:
+      INGESTION_PORT: "8000"
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: groundwork_chunks
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_INDEX: groundwork_chunks
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      EMBEDDING_CACHE_DIR: /models/fastembed
+      BOOTSTRAP_STORAGE: "true"
+      OPENFGA_URL: http://openfga:8080
+      OPENFGA_STORE_NAME: groundwork_local
+    depends_on:
+      qdrant:
+        condition: service_started
+      elasticsearch:
+        condition: service_healthy
+      openfga:
+        condition: service_started
+    volumes:
+      - embedding-models:/models/fastembed
+    networks:
+      - groundwork
+
+  # --- Backends: NONE of these publish host ports in production. ---
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    # NOTE: no `ports:` — internal only. Direct DB access from outside is impossible.
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER: groundwork
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-groundwork}
+      POSTGRES_DB: groundwork
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U groundwork -d groundwork"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - groundwork
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    # NOTE: no `ports:` — internal only.
+    expose:
+      - "6333"
+    environment:
+      QDRANT__STORAGE__ON_DISK_PAYLOAD: "true"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - groundwork
+
+  openfga:
+    image: openfga/openfga:latest
+    restart: unless-stopped
+    command: ["run", "--http-addr", "0.0.0.0:8080", "--grpc-addr", "0.0.0.0:8081", "--playground-enabled=false"]
+    # NOTE: no `ports:` — internal only.
+    expose:
+      - "8080"
+    environment:
+      OPENFGA_DATASTORE_ENGINE: memory
+      OPENFGA_LOG_FORMAT: json
+    networks:
+      - groundwork
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    restart: unless-stopped
+    # NOTE: no `ports:` — internal only.
+    expose:
+      - "9200"
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - groundwork
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    # NOTE: no `ports:` — internal only.
+    expose:
+      - "9000"
+      - "9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-groundwork}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-groundwork-local-dev}
+    volumes:
+      - minio-data:/data
+    networks:
+      - groundwork
+
+networks:
+  groundwork:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  qdrant-data:
+  elasticsearch-data:
+  minio-data:
+  embedding-models:

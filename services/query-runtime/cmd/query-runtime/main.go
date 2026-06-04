@@ -60,7 +60,12 @@ func main() {
 	// every query writes to the immutable Postgres audit_log (hash-chained); otherwise
 	// an in-memory trace store is used for local/dev. The engine writes the entry
 	// synchronously before returning and fails closed if the write fails.
-	auditor, closeAudit, err := buildAuditWriter(cfg.DatabaseURL, backend)
+	//
+	// The same AUDIT_TIMEOUT_MS budget is used both for the engine's audit step and for the
+	// Postgres writer's own per-write deadline, so the configured timeout is actually honored
+	// (the writer no longer caps it at a hardcoded 30ms).
+	auditWrite := envDuration("AUDIT_TIMEOUT_MS", auditTimeoutDefault(cfg.DatabaseURL))
+	auditor, closeAudit, err := buildAuditWriter(cfg.DatabaseURL, backend, auditWrite)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -72,7 +77,7 @@ func main() {
 			Embedding:    cfg.EmbeddingTimeout,
 			QdrantSearch: envDuration("QDRANT_TIMEOUT_MS", 15*time.Second),
 			OpenFGACheck: cfg.OpenFGATimeout,
-			AuditWrite:   envDuration("AUDIT_TIMEOUT_MS", auditTimeoutDefault(cfg.DatabaseURL)),
+			AuditWrite:   auditWrite,
 		},
 		Backend: engine.VectorRetrievalClient{Vector: backend.Vector},
 		ACL:     backend.ACL,
@@ -184,7 +189,7 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 
 // buildAuditWriter selects the audit sink: the immutable Postgres ledger when
 // DATABASE_URL is set, otherwise the in-memory trace store for local/dev.
-func buildAuditWriter(databaseURL string, backend runtime.Backend) (engine.AuditWriter, func(), error) {
+func buildAuditWriter(databaseURL string, backend runtime.Backend, timeout time.Duration) (engine.AuditWriter, func(), error) {
 	if databaseURL == "" {
 		return engine.RuntimeTraceAuditWriter{Trace: backend.Trace}, func() {}, nil
 	}
@@ -192,7 +197,11 @@ func buildAuditWriter(databaseURL string, backend runtime.Backend) (engine.Audit
 	if err != nil {
 		return nil, func() {}, err
 	}
-	return engine.NewPostgresAuditWriter(db), func() { _ = db.Close() }, nil
+	// Honor the configured AUDIT_TIMEOUT_MS for the per-write deadline. The bare
+	// NewPostgresAuditWriter hardcodes a 30ms budget that is too tight for a real Postgres
+	// round-trip (advisory lock + select + insert) and would fail audit writes — and thus
+	// fail queries closed — under load or on a cold connection.
+	return engine.NewPostgresAuditWriterWithTimeout(db, timeout), func() { _ = db.Close() }, nil
 }
 
 // buildPrincipalResolver constructs the canonical principal resolver: the Postgres-backed

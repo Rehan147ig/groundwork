@@ -303,7 +303,7 @@
           </div>
         </div>
 
-        <div class="relative min-h-[560px] border border-wire bg-black p-5 md:p-8">
+        <div class="relative border border-wire bg-black p-5 md:p-8 md:min-h-[560px]">
           <div class="absolute inset-0 scan"></div>
           <div class="absolute left-0 top-0 h-full w-px bg-gradient-to-b from-transparent via-neon to-transparent opacity-80"></div>
           <div class="relative h-full">
@@ -312,7 +312,51 @@
               <span class="border border-risk px-3 py-1 text-xs uppercase text-risk">Unfiltered risk</span>
             </div>
 
-            <div class="relative mx-auto mt-10 h-[420px] max-w-[640px]">
+            <!-- Mobile layout: stacked vertical flow -->
+            <div class="flex flex-col gap-4 md:hidden mt-6">
+              <div class="border border-wire bg-panel p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-mist">AI Agent</p>
+                <div class="mt-3 h-10 border border-wire bg-black"></div>
+              </div>
+
+              <div class="flex items-center justify-center">
+                <div class="h-8 w-px bg-risk/60"></div>
+              </div>
+
+              <div class="border border-risk bg-black/80 p-4 risk-glow relative overflow-hidden">
+                <div class="sweep absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-risk/30 to-transparent"></div>
+                <p class="relative text-[10px] uppercase tracking-[0.2em] text-risk">No gate</p>
+                <p class="relative mt-3 text-sm uppercase text-risk">Sensitive context passes through</p>
+              </div>
+
+              <div class="flex items-center justify-center">
+                <div class="h-8 w-px bg-risk/60"></div>
+              </div>
+
+              <div class="border border-wire bg-panel p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-mist">Private data</p>
+                <div class="mt-3 grid grid-cols-4 gap-2">
+                  <span class="h-6 bg-risk/40"></span><span class="h-6 bg-neon/40"></span><span class="h-6 bg-risk/40"></span><span class="h-6 bg-neon/40"></span>
+                </div>
+              </div>
+
+              <div class="mt-4 border border-neon bg-black p-4 neon-glow relative">
+                <span class="absolute -top-3 left-4 bg-black px-2 text-[10px] uppercase tracking-[0.22em] text-neon">Groundwork runtime gate</span>
+                <div class="flex flex-col gap-3 mt-2">
+                  <div class="border border-wire bg-panel p-3 text-center text-xs uppercase text-mist">Request</div>
+                  <div class="mx-auto h-px w-full bg-neon"></div>
+                  <div class="relative border border-neon bg-neon p-3 text-center text-xs font-bold uppercase text-black">
+                    Verify
+                    <span class="node-ping absolute -right-2 -top-2 h-4 w-4 border border-neon bg-black"></span>
+                  </div>
+                  <div class="mx-auto h-px w-full bg-neon"></div>
+                  <div class="border border-wire bg-panel p-3 text-center text-xs uppercase text-neon">Allowed context</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Desktop layout: original absolute-positioned visualization -->
+            <div class="relative mx-auto mt-10 h-[420px] max-w-[640px] hidden md:block">
               <div class="absolute left-0 top-16 w-40 border border-wire bg-panel p-4">
                 <p class="text-[10px] uppercase tracking-[0.2em] text-mist">AI Agent</p>
                 <div class="mt-4 h-12 border border-wire bg-black"></div>

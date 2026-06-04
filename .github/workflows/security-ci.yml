@@ -1,0 +1,67 @@
+﻿name: security-ci
+
+# Runs ONLY the security-critical tests that prove Groundwork's core guarantees:
+# fail-closed enforcement, cross-tenant isolation, ACL filtering + folder inheritance,
+# the immutable/tamper-evident audit ledger, JWT verification, forged-identity rejection,
+# verified-identity precedence, shadow mode, canonical-principal resolution (+ unresolved
+# fail-closed), and revocation propagation.
+#
+# This is a REQUIRED check: if any of these fail, the PR cannot merge. The regex targets
+# REAL test names across all packages (engine, runtime, mcp, aclsync). A guard fails the
+# job if the regex matches ZERO tests, so an accidental rename can never turn the security
+# gate into a silent green. To update the set, edit SECURITY_TESTS below and docs/ci.md.
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Substring/regex alternatives matched (unanchored) against Go test names.
+  SECURITY_TESTS: "FailsClosed|FailClosed|Unresolved|CrossTenant|Authorized|AccessMatrix|FiltersACL|ClassifyACL|Audit|VerifyChain|JWTVerifier|Forged|IgnoresBodyUserID|VerifiedIdentity|ShadowMode|Revocation|DestructiveDelete|NoDeleteRule|NoUpdateRule|ImmutableDigest"
+
+jobs:
+  security-ci:
+    name: security-ci
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/query-runtime
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: services/query-runtime/go.mod
+          cache: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('services/query-runtime/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run security invariant tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Security test pattern: ${SECURITY_TESTS}"
+          go test -v -run "${SECURITY_TESTS}" ./... | tee /tmp/security-tests.out
+          ran="$(grep -c '^=== RUN' /tmp/security-tests.out || true)"
+          echo "Matched and ran ${ran} security test(s)."
+          if [ "${ran}" -eq 0 ]; then
+            echo "::error::Security invariant regex matched ZERO tests - the gate would pass vacuously. Update SECURITY_TESTS in .github/workflows/security-ci.yml."
+            exit 1
+          fi

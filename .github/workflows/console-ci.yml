@@ -1,0 +1,46 @@
+name: console-ci
+
+# Installs dependencies and builds the Next.js console.
+#
+# This is an npm WORKSPACES monorepo: the single package-lock.json lives at the repo root
+# and apps/console has no lockfile of its own, so `npm ci` MUST run at the root (running it
+# inside apps/console would fail with "no lock file found"). `npm run build` at the root maps
+# to `npm run build --workspace apps/console`. See docs/ci.md.
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: console-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  console-ci:
+    name: console-ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          # Caches the npm download cache (~/.npm) keyed on package-lock.json. We do not cache
+          # node_modules directly because `npm ci` deletes node_modules before installing, so a
+          # node_modules cache would be wiped on every run.
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies (workspace root)
+        run: npm ci
+
+      - name: Build console
+        run: npm run build --workspace apps/console

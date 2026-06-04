@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Migration order check (CI gate).
 
 Asserts that the numeric prefixes of migrations/*_*.up.sql form a contiguous,
 gap-free, duplicate-free sequence. The sequence need not start at 1 (this repo's
-baseline begins at 003) — it only needs to be sequential from its minimum.
+baseline begins at 003) - it only needs to be sequential from its minimum.
 
 Also verifies every *.up.sql has a matching *.down.sql, so migrations stay
 reversible. Exits non-zero (failing CI) on any violation.

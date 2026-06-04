@@ -1,10 +1,10 @@
-# CI/CD Pipeline
+﻿# CI/CD Pipeline
 
-Groundwork is a security product, so CI is part of the security guarantee — not just
+Groundwork is a security product, so CI is part of the security guarantee - not just
 engineering hygiene. Every pull request and every push to `master` is validated by a set of
 GitHub Actions workflows under `.github/workflows/`. This is **Phase 1: PR validation**. It
 deliberately does **not** start live infrastructure (no Postgres/OpenFGA/Qdrant/Elasticsearch),
-use any cloud credentials, or publish/release anything — those come in later phases.
+use any cloud credentials, or publish/release anything - those come in later phases.
 
 ## Workflows
 
@@ -15,12 +15,12 @@ use any cloud credentials, or publish/release anything — those come in later p
 | `console-ci` | `console-ci.yml` | PR + push to master | The Next.js console installs (`npm ci` at the workspace root) and `next build` succeeds. |
 | `compose-validate` | `compose-validate.yml` | PR + push to master | Both `infra/docker-compose*.yml` files parse and resolve (`docker compose config --quiet`). The stack is **not** started. |
 | `secret-scan` | `secret-scan.yml` | every PR | gitleaks finds no committed secrets/keys/tokens in the diff. |
-| `security-ci` | `security-ci.yml` | PR + push to master | **Only** the security-critical tests that prove Groundwork's core guarantees (see below). Fails the PR if any fail — or if the regex matches zero tests. |
+| `security-ci` | `security-ci.yml` | PR + push to master | **Only** the security-critical tests that prove Groundwork's core guarantees (see below). Fails the PR if any fail - or if the regex matches zero tests. |
 | `migration-check` | `migration-check.yml` | PR touching `migrations/**` | `migrations/*_*.up.sql` form a contiguous, gap-free, duplicate-free sequence and each has a matching `.down.sql`. |
 
 ## Required vs. recommended checks
 
-Configure these in **Settings → Branches → Branch protection rule for `master` → Require status
+Configure these in **Settings -> Branches -> Branch protection rule for `master` -> Require status
 checks to pass before merging**.
 
 **Required before merge:**
@@ -76,11 +76,11 @@ pip install -r requirements.txt
 python -m unittest discover -s tests -v
 ```
 Note: a bare `python -m unittest discover` from `services/ingestion` finds **0 tests** (the
-`tests/` directory is not a package) and still exits 0 — a false green. Always use `-s tests`.
+`tests/` directory is not a package) and still exits 0 - a false green. Always use `-s tests`.
 
 ### Console (`console-ci`)
 ```bash
-# From the repo ROOT (npm workspaces — the only package-lock.json is at the root):
+# From the repo ROOT (npm workspaces - the only package-lock.json is at the root):
 npm ci
 NEXT_TELEMETRY_DISABLED=1 npm run build --workspace apps/console
 ```
@@ -105,20 +105,20 @@ python3 scripts/check_migrations.py
 the workflow) is built from the **actual** test names in the repo and matches ~40 tests across
 the `engine`, `runtime`, `mcp`, and `aclsync` packages, covering:
 
-- **Fail-closed enforcement** — retrieval timeout, ACL-circuit-open, audit-write failure,
+- **Fail-closed enforcement** - retrieval timeout, ACL-circuit-open, audit-write failure,
   missing/invalid identity assertions, backend failure.
-- **Cross-tenant isolation** — cross-tenant candidates blocked; aliases don't resolve across
+- **Cross-tenant isolation** - cross-tenant candidates blocked; aliases don't resolve across
   tenants.
-- **ACL filtering + folder inheritance** — group/nested-group and folder→document resolution.
-- **Immutable, tamper-evident audit ledger** — digest, no-update/no-delete rules, chain
+- **ACL filtering + folder inheritance** - group/nested-group and folder->document resolution.
+- **Immutable, tamper-evident audit ledger** - digest, no-update/no-delete rules, chain
   verification (clean / broken-link / modified-row).
-- **Identity** — JWT verification (rejects none-alg, bad signature, expired, missing expiry),
+- **Identity** - JWT verification (rejects none-alg, bad signature, expired, missing expiry),
   forged `user_id` ignored in favor of the verified token, canonical principal resolution,
   and unresolved-identity fail-closed.
-- **Shadow mode** — observe-only returns but records would-block, while tenant/region stay hard.
-- **Revocation propagation** — revocation SLA and watch-mode revocation.
+- **Shadow mode** - observe-only returns but records would-block, while tenant/region stay hard.
+- **Revocation propagation** - revocation SLA and watch-mode revocation.
 
-> ⚠️ `go test -run` matches test-name **substrings** and exits 0 even when it matches nothing.
+> Warning: `go test -run` matches test-name **substrings** and exits 0 even when it matches nothing.
 > A regex that matches no tests would make the security gate pass vacuously. The workflow
 > guards against this: it counts `=== RUN` lines and **fails if zero security tests ran**. If
 > you rename or move security tests, update `SECURITY_TESTS` in `security-ci.yml` (and this
@@ -130,7 +130,7 @@ The Microsoft Graph connector talks to Entra/SharePoint over OAuth 2.0 client-cr
 which needs real Azure tenant credentials. CI must never hold cloud secrets and must be
 hermetic, so the Graph connector is unit-tested against a **fake `GraphClient`**
 (`services/query-runtime/internal/aclsync/msgraph/msgraph_test.go`): mapping, nested groups,
-folder/document inheritance, permission→viewer translation, revocation events, delta
+folder/document inheritance, permission->viewer translation, revocation events, delta
 classification, and the "Graph auth failure must not delete tuples" safety property are all
 exercised without a network. The same principle applies to Postgres/OpenFGA/Qdrant/Elasticsearch:
 PR CI uses in-memory fakes; the live OAuth/HTTP and database paths are integration-tested in a
@@ -141,7 +141,7 @@ later phase with credentials supplied out-of-band (never committed, never in PR 
 1. Create `.github/workflows/<service>-ci.yml`. Trigger on `pull_request` and `push: branches: [master]`.
 2. Use the matching language toolchain action (`actions/setup-go`/`setup-python`/`setup-node`) and
    cache dependencies keyed on the lockfile (`go.sum` / `requirements.txt` / `package-lock.json`).
-3. Keep it **hermetic** — fakes/mocks only, no live infra, no cloud secrets.
+3. Keep it **hermetic** - fakes/mocks only, no live infra, no cloud secrets.
 4. Give the single job a unique `name:` (this becomes the status-check name) and a unique
    `concurrency.group`.
 5. If it should gate merges, leave it **unfiltered** (run on all PRs) and add it to the required

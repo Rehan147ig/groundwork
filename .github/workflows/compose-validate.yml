@@ -1,0 +1,42 @@
+﻿name: compose-validate
+
+# Validates that both Docker Compose files parse and resolve correctly. It does NOT start
+# the stack - `docker compose config --quiet` only renders/validates the merged config.
+#
+# infra/docker-compose.prod.yml declares two REQUIRED interpolation variables
+# (GROUNDWORK_BOOTSTRAP_API_KEY and GROUNDWORK_JWT_HS_SECRET, via the `${VAR:?...}` form).
+# `config` fails if they are unset, so we provide throwaway NON-SECRET placeholders purely so
+# interpolation succeeds. These are not credentials and are never used to run anything; real
+# secrets are injected at deploy time via the secret manager.
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compose-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose-validate:
+    name: compose-validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Docker Compose version
+        run: docker compose version
+
+      - name: Validate dev compose (infra/docker-compose.yml)
+        run: docker compose -f infra/docker-compose.yml config --quiet
+
+      - name: Validate prod compose (infra/docker-compose.prod.yml)
+        env:
+          # CI-only placeholders to satisfy required ${VAR:?} interpolation. NOT real secrets.
+          GROUNDWORK_BOOTSTRAP_API_KEY: ci-validate-only-not-a-real-key
+          GROUNDWORK_JWT_HS_SECRET: ci-validate-only-not-a-real-secret
+        run: docker compose -f infra/docker-compose.prod.yml config --quiet

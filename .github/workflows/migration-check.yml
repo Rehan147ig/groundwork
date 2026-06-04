@@ -1,0 +1,36 @@
+﻿name: migration-check
+
+# Verifies that migrations/*_*.up.sql form a contiguous, gap-free, duplicate-free numeric
+# sequence (and that each has a matching .down.sql). This is the one NON-required check, so
+# it is safe to path-filter: if a PR doesn't touch migrations/, the check simply doesn't run
+# and does not block the merge. (Required checks deliberately have no path filter - see
+# docs/ci.md.)
+on:
+  pull_request:
+    paths:
+      - "migrations/**"
+      - "scripts/check_migrations.py"
+      - ".github/workflows/migration-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration-check:
+    name: migration-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check migration ordering
+        run: python3 scripts/check_migrations.py

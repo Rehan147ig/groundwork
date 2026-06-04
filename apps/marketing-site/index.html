@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Groundwork.IO - Runtime Authorization for Enterprise AI</title>
+  <meta name="description" content="Groundwork.IO is runtime data access control for enterprise AI systems." />
+  <link rel="icon" type="image/png" href="assets/groundwork-logo-clean.png" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            ink: "#030403",
+            obsidian: "#080A08",
+            panel: "#0D100D",
+            panel2: "#121812",
+            wire: "#283328",
+            wire2: "#3F5138",
+            neon: "#70DF04",
+            neon2: "#9CFF31",
+            mist: "#B7C4AE",
+            paper: "#F4FFF0",
+            risk: "#FF9D8C",
+            amber: "#FFD36E"
+          },
+          fontFamily: {
+            headline: ["Sora", "sans-serif"],
+            mono: ["JetBrains Mono", "monospace"]
+          },
+          maxWidth: { site: "1440px" }
+        }
+      }
+    }
+  </script>
+  <style>
+    html { scroll-behavior: smooth; }
+    body { background: #030403; color: #f4fff0; overflow-x: hidden; }
+
+    .grid-bg {
+      background-image:
+        linear-gradient(rgba(112,223,4,.07) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(112,223,4,.07) 1px, transparent 1px);
+      background-size: 56px 56px;
+      mask-image: radial-gradient(circle at center, black 0%, black 52%, transparent 82%);
+    }
+    .scan {
+      background: linear-gradient(to bottom, transparent, transparent 50%, rgba(112,223,4,.035) 50%, rgba(112,223,4,.035));
+      background-size: 100% 7px;
+      pointer-events: none;
+    }
+    .noise:before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      opacity: .08;
+      pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+    }
+    .neon-glow { box-shadow: 0 0 22px rgba(112,223,4,.32), inset 0 0 22px rgba(112,223,4,.08); }
+    .risk-glow { box-shadow: 0 0 20px rgba(255,157,140,.18), inset 0 0 18px rgba(255,157,140,.06); }
+
+    @keyframes pulseLine {
+      0%, 100% { opacity: .25; transform: scaleX(.15); }
+      45% { opacity: 1; transform: scaleX(1); }
+      70% { opacity: .55; transform: scaleX(.75); }
+    }
+    @keyframes packetMove {
+      0% { transform: translateX(0); opacity: 0; }
+      10% { opacity: 1; }
+      85% { opacity: 1; }
+      100% { transform: translateX(290px); opacity: 0; }
+    }
+    @keyframes packetDrop {
+      0% { transform: translateX(0); opacity: 0; }
+      12% { opacity: 1; }
+      45% { transform: translateX(118px); opacity: 1; }
+      50% { transform: translateX(118px) translateY(20px); opacity: .3; }
+      100% { transform: translateX(118px) translateY(52px); opacity: 0; }
+    }
+    @keyframes scanSweep {
+      0% { transform: translateY(-110%); opacity: 0; }
+      10%, 65% { opacity: 1; }
+      100% { transform: translateY(120%); opacity: 0; }
+    }
+    @keyframes floatLogo {
+      0%, 100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 22px rgba(112,223,4,.25)); }
+      50% { transform: translateY(-8px) scale(1.015); filter: drop-shadow(0 0 34px rgba(112,223,4,.46)); }
+    }
+    @keyframes marquee {
+      from { transform: translateX(0); }
+      to { transform: translateX(-50%); }
+    }
+    @keyframes nodePing {
+      0%, 100% { opacity: .3; transform: scale(.7); }
+      45% { opacity: 1; transform: scale(1.05); }
+    }
+    @keyframes drawRing {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    @keyframes triPulse {
+      0%, 100% { opacity: .16; filter: drop-shadow(0 0 0 rgba(112,223,4,0)); transform: scale(.98); }
+      45% { opacity: .78; filter: drop-shadow(0 0 14px rgba(112,223,4,.55)); transform: scale(1.02); }
+    }
+    @keyframes gridSweepX {
+      0% { transform: translateX(-120%); opacity: 0; }
+      15%, 70% { opacity: .85; }
+      100% { transform: translateX(120%); opacity: 0; }
+    }
+    @keyframes orbitNode {
+      0% { transform: rotate(0deg) translateX(148px) rotate(0deg); }
+      100% { transform: rotate(360deg) translateX(148px) rotate(-360deg); }
+    }
+    .packet-allow { animation: packetMove 2.9s linear infinite; }
+    .packet-block { animation: packetDrop 2.9s linear infinite; }
+    .sweep { animation: scanSweep 3.2s ease-in-out infinite; }
+    .float-logo { animation: floatLogo 5.5s ease-in-out infinite; }
+    .marquee { animation: marquee 30s linear infinite; }
+    .node-ping { animation: nodePing 2.8s ease-in-out infinite; }
+    .spin-slow { animation: drawRing 16s linear infinite; }
+    .tri {
+      clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+      background: linear-gradient(140deg, rgba(112,223,4,.04), rgba(112,223,4,.18));
+      border: 1px solid rgba(112,223,4,.26);
+      animation: triPulse 4.8s ease-in-out infinite;
+    }
+    .tri.down { clip-path: polygon(0 0, 100% 0, 50% 100%); }
+    .tri:nth-child(3n) { animation-delay: .6s; }
+    .tri:nth-child(5n) { animation-delay: 1.1s; opacity: .28; }
+    .tri:nth-child(7n) { animation-delay: 1.8s; }
+    .grid-sweep { animation: gridSweepX 4s ease-in-out infinite; }
+    .orbit-node { animation: orbitNode 9s linear infinite; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *:before, *:after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body class="font-mono antialiased selection:bg-neon selection:text-black">
+  <nav class="fixed top-0 z-50 w-full border-b border-wire bg-ink/88 backdrop-blur-xl">
+    <div class="mx-auto flex max-w-site items-center justify-between px-5 py-4 md:px-8">
+      <a href="#top" class="flex items-center gap-3">
+        <img src="assets/groundwork-logo-clean.png" alt="Groundwork logo" class="h-8 w-8 object-contain" />
+        <span class="font-headline text-lg font-extrabold tracking-tight text-neon">GROUNDWORK.IO</span>
+      </a>
+      <div class="hidden items-center gap-8 md:flex">
+        <a class="text-xs uppercase tracking-[0.24em] text-mist transition hover:text-neon" href="#exposure">Exposure</a>
+        <a class="text-xs uppercase tracking-[0.24em] text-mist transition hover:text-neon" href="#control">Control</a>
+        <a class="text-xs uppercase tracking-[0.24em] text-mist transition hover:text-neon" href="#shadow">Shadow Mode</a>
+        <a class="text-xs uppercase tracking-[0.24em] text-mist transition hover:text-neon" href="#pilot">Pilot</a>
+      </div>
+      <div class="flex items-center gap-4">
+        <a href="#pilot" class="hidden border border-neon bg-neon px-5 py-2 text-xs font-extrabold uppercase tracking-[0.18em] text-black transition hover:bg-transparent hover:text-neon md:inline-block">Request Pilot</a>
+        <button id="mobile-menu-btn" class="md:hidden text-mist hover:text-neon">
+          <span class="material-symbols-outlined text-2xl">menu</span>
+        </button>
+      </div>
+    </div>
+    <div id="mobile-menu" class="hidden border-t border-wire bg-ink/95 pb-4 pt-2 md:hidden">
+      <div class="flex flex-col space-y-4 px-5 pt-2">
+        <a class="text-xs uppercase tracking-[0.24em] text-mist transition hover:text-neon" href="#exposure">Exposure</a>
+        <a class="text-xs uppercase tracking-[0.24em] text-mist transition hover:text-neon" href="#control">Control</a>
+        <a class="text-xs uppercase tracking-[0.24em] text-mist transition hover:text-neon" href="#shadow">Shadow Mode</a>
+        <a class="text-xs uppercase tracking-[0.24em] text-mist transition hover:text-neon" href="#pilot">Pilot</a>
+        <a href="#pilot" class="mt-2 w-full text-center border border-neon bg-neon px-5 py-3 text-xs font-extrabold uppercase tracking-[0.18em] text-black transition hover:bg-transparent hover:text-neon">Request Pilot</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top" class="pt-20">
+    <section class="relative min-h-[calc(100vh-80px)] overflow-hidden border-b border-wire noise">
+      <div class="absolute inset-0 grid-bg opacity-70"></div>
+      <div class="absolute inset-0 bg-[radial-gradient(circle_at_50%_20%,rgba(112,223,4,.18),transparent_30%),radial-gradient(circle_at_15%_70%,rgba(112,223,4,.08),transparent_25%),linear-gradient(to_bottom,rgba(3,4,3,.1),#030403_88%)]"></div>
+      <div class="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-ink to-transparent"></div>
+      <div class="relative mx-auto grid max-w-site items-center gap-14 px-5 py-20 md:px-8 lg:grid-cols-[1.08fr_.92fr] lg:py-28">
+        <div>
+          <div class="mb-8 inline-flex items-center gap-3 border border-wire bg-panel/70 px-4 py-2 text-xs uppercase tracking-[0.22em] text-mist">
+            <span class="h-2 w-2 bg-neon"></span>
+            Runtime data access control
+          </div>
+          <h1 class="font-headline text-5xl font-extrabold uppercase leading-[.94] tracking-[0.04em] text-paper md:text-7xl xl:text-8xl">
+            AI agents only see what users are allowed to access.
+          </h1>
+          <p class="mt-8 max-w-3xl text-base uppercase leading-8 text-mist md:text-lg">
+            Groundwork is the control layer between enterprise AI and private data. It verifies identity, evaluates live access, blocks unsafe context, and records proof before information reaches the model.
+          </p>
+          <form id="hero-waitlist" class="mt-10 grid max-w-3xl gap-3 border border-wire bg-panel/80 p-3 md:grid-cols-[1fr_1fr_auto]">
+            <input name="email" required type="email" class="border border-wire bg-black p-4 text-sm uppercase text-paper placeholder:text-mist/45 focus:border-neon focus:ring-0" placeholder="Work email" />
+            <input name="company" type="text" class="border border-wire bg-black p-4 text-sm uppercase text-paper placeholder:text-mist/45 focus:border-neon focus:ring-0" placeholder="Company" />
+            <button type="submit" class="border border-neon bg-neon px-7 py-4 text-sm font-extrabold uppercase tracking-[0.16em] text-black transition hover:bg-black hover:text-neon">Join</button>
+          </form>
+          <p id="hero-status" class="mt-4 min-h-6 text-xs uppercase tracking-[0.18em] text-mist"></p>
+        </div>
+
+        <div class="relative min-h-[560px]">
+          <div class="absolute -inset-10 bg-[radial-gradient(circle,rgba(112,223,4,.2),transparent_58%)] blur-2xl"></div>
+          <div class="relative h-full overflow-hidden border border-neon bg-black/72 p-5 neon-glow">
+            <div class="absolute inset-0 grid-bg opacity-50"></div>
+            <div class="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(112,223,4,.18),transparent_48%)]"></div>
+            <div class="grid-sweep absolute inset-y-0 left-0 w-28 bg-gradient-to-r from-transparent via-neon/25 to-transparent blur-sm"></div>
+            <div class="absolute inset-6 border border-wire2"></div>
+            <div class="absolute inset-12 border border-wire"></div>
+
+            <div class="relative z-10 mb-6 flex items-center justify-between border-b border-wire pb-4">
+              <span class="text-xs uppercase tracking-[0.24em] text-neon">Permission Field</span>
+              <span class="text-xs uppercase tracking-[0.24em] text-mist">Blocked by default</span>
+            </div>
+
+            <div class="relative z-10 mx-auto mt-8 h-[420px] max-w-[520px]">
+              <div class="absolute inset-0 grid grid-cols-6 gap-2 opacity-90">
+                <span class="tri"></span><span class="tri down"></span><span class="tri"></span><span class="tri down"></span><span class="tri"></span><span class="tri down"></span>
+                <span class="tri down"></span><span class="tri"></span><span class="tri down"></span><span class="tri"></span><span class="tri down"></span><span class="tri"></span>
+                <span class="tri"></span><span class="tri down"></span><span class="tri"></span><span class="tri down"></span><span class="tri"></span><span class="tri down"></span>
+                <span class="tri down"></span><span class="tri"></span><span class="tri down"></span><span class="tri"></span><span class="tri down"></span><span class="tri"></span>
+                <span class="tri"></span><span class="tri down"></span><span class="tri"></span><span class="tri down"></span><span class="tri"></span><span class="tri down"></span>
+              </div>
+
+              <svg class="absolute inset-0 h-full w-full" viewBox="0 0 520 420" aria-hidden="true">
+                <defs>
+                  <linearGradient id="gwLine" x1="0" x2="1">
+                    <stop offset="0" stop-color="#70DF04" stop-opacity="0"/>
+                    <stop offset=".5" stop-color="#70DF04" stop-opacity=".9"/>
+                    <stop offset="1" stop-color="#70DF04" stop-opacity="0"/>
+                  </linearGradient>
+                  <filter id="gwGlow">
+                    <feGaussianBlur stdDeviation="4" result="blur"/>
+                    <feMerge>
+                      <feMergeNode in="blur"/>
+                      <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                  </filter>
+                </defs>
+                <path d="M36 316 L150 225 L236 265 L335 132 L486 88" stroke="url(#gwLine)" stroke-width="2" fill="none" filter="url(#gwGlow)"/>
+                <path d="M62 94 L178 146 L270 75 L418 174 L486 142" stroke="#70DF04" stroke-opacity=".22" stroke-width="1" fill="none"/>
+                <path d="M48 356 L176 316 L258 354 L358 286 L486 326" stroke="#70DF04" stroke-opacity=".18" stroke-width="1" fill="none"/>
+                <polygon points="260,88 390,314 130,314" fill="rgba(112,223,4,.035)" stroke="#70DF04" stroke-opacity=".65" stroke-width="1.5"/>
+                <polygon points="260,142 338,278 182,278" fill="rgba(0,0,0,.45)" stroke="#70DF04" stroke-opacity=".38" stroke-width="1"/>
+              </svg>
+
+              <div class="absolute left-1/2 top-1/2 h-[300px] w-[300px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-neon/25">
+                <div class="orbit-node absolute left-1/2 top-1/2 h-4 w-4 -ml-2 -mt-2 bg-neon shadow-[0_0_18px_rgba(112,223,4,.8)]"></div>
+              </div>
+
+              <div class="absolute left-1/2 top-1/2 flex h-48 w-48 -translate-x-1/2 -translate-y-1/2 items-center justify-center border border-neon bg-black/82 neon-glow">
+                <img src="assets/groundwork-logo-clean.png" alt="Groundwork mark" class="float-logo h-32 w-32 object-contain" />
+              </div>
+
+              <div class="absolute bottom-4 left-4 border border-wire bg-black/90 p-3">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-mist">Unknown access</p>
+                <p class="mt-1 text-sm uppercase text-risk">No context released</p>
+              </div>
+              <div class="absolute right-4 top-4 border border-wire bg-black/90 p-3">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-mist">Verified path</p>
+                <p class="mt-1 text-sm uppercase text-neon">Context allowed</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="overflow-hidden border-y border-black bg-neon py-2 text-black">
+      <div class="marquee flex w-[200%] gap-10 whitespace-nowrap text-xs font-extrabold uppercase tracking-[0.16em]">
+        <span>Verified identity before retrieval</span>
+        <span>Observe risk in shadow mode</span>
+        <span>Block unknown access by default</span>
+        <span>Keep audit evidence for every decision</span>
+        <span>Verified identity before retrieval</span>
+        <span>Observe risk in shadow mode</span>
+        <span>Block unknown access by default</span>
+        <span>Keep audit evidence for every decision</span>
+      </div>
+    </div>
+
+    <section id="exposure" class="relative overflow-hidden border-b border-wire px-5 py-20 md:px-8 md:py-28">
+      <div class="absolute inset-0 bg-[radial-gradient(circle_at_72%_50%,rgba(112,223,4,.12),transparent_35%)]"></div>
+      <div class="relative mx-auto grid max-w-site gap-12 lg:grid-cols-[.85fr_1.15fr]">
+        <div>
+          <p class="mb-4 text-xs uppercase tracking-[0.32em] text-neon">The Exposure Vector</p>
+          <h2 class="font-headline text-4xl font-extrabold uppercase leading-tight text-paper md:text-6xl">Retrieval is becoming the new leak path.</h2>
+          <p class="mt-7 max-w-xl leading-7 text-mist">
+            Enterprise AI is being connected to internal knowledge faster than access controls are being rechecked. Without a runtime gate, sensitive context can move from private systems into an AI prompt before security teams have proof of what happened.
+          </p>
+          <div class="mt-9 space-y-4">
+            <div class="border border-wire bg-panel p-5">
+              <p class="text-sm uppercase tracking-[0.2em] text-neon">[01] Permission drift</p>
+              <p class="mt-3 text-sm leading-6 text-mist">Source access changes, but AI retrieval continues using stale assumptions.</p>
+            </div>
+            <div class="border border-wire bg-panel p-5">
+              <p class="text-sm uppercase tracking-[0.2em] text-risk">[02] Unauthorized context</p>
+              <p class="mt-3 text-sm leading-6 text-mist">A relevant chunk can still be unsafe if the requester is not entitled to see it.</p>
+            </div>
+            <div class="border border-wire bg-panel p-5">
+              <p class="text-sm uppercase tracking-[0.2em] text-paper">[03] Missing proof</p>
+              <p class="mt-3 text-sm leading-6 text-mist">Teams need evidence of what was allowed, blocked, and why.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="relative min-h-[560px] border border-wire bg-black p-5 md:p-8">
+          <div class="absolute inset-0 scan"></div>
+          <div class="absolute left-0 top-0 h-full w-px bg-gradient-to-b from-transparent via-neon to-transparent opacity-80"></div>
+          <div class="relative h-full">
+            <div class="mb-6 flex items-center justify-between border-b border-wire pb-4">
+              <span class="text-xs uppercase tracking-[0.24em] text-mist">Live retrieval path</span>
+              <span class="border border-risk px-3 py-1 text-xs uppercase text-risk">Unfiltered risk</span>
+            </div>
+
+            <div class="relative mx-auto mt-10 h-[420px] max-w-[640px]">
+              <div class="absolute left-0 top-16 w-40 border border-wire bg-panel p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-mist">AI Agent</p>
+                <div class="mt-4 h-12 border border-wire bg-black"></div>
+              </div>
+
+              <div class="absolute left-[210px] top-10 h-40 w-40 border border-risk bg-black/80 p-4 risk-glow">
+                <div class="sweep absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-risk/30 to-transparent"></div>
+                <p class="relative text-[10px] uppercase tracking-[0.2em] text-risk">No gate</p>
+                <p class="relative mt-12 text-sm uppercase text-risk">Sensitive context passes</p>
+              </div>
+
+              <div class="absolute right-0 top-16 w-44 border border-wire bg-panel p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-mist">Private data</p>
+                <div class="mt-4 grid grid-cols-4 gap-2">
+                  <span class="h-6 bg-risk/40"></span><span class="h-6 bg-neon/40"></span><span class="h-6 bg-risk/40"></span><span class="h-6 bg-neon/40"></span>
+                </div>
+              </div>
+
+              <div class="absolute left-40 top-24 h-px w-[360px] bg-risk/50 origin-left" style="animation: pulseLine 2.8s ease-in-out infinite;"></div>
+              <div class="packet-block absolute left-40 top-[88px] h-3 w-3 bg-risk"></div>
+              <div class="packet-block absolute left-40 top-[110px] h-3 w-3 bg-risk" style="animation-delay:.55s"></div>
+
+              <div class="absolute bottom-0 left-0 right-0 border border-neon bg-black p-5 neon-glow">
+                <span class="absolute -top-3 left-5 bg-black px-2 text-xs uppercase tracking-[0.22em] text-neon">Groundwork runtime gate</span>
+                <div class="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-4">
+                  <div class="border border-wire bg-panel p-3 text-center text-xs uppercase text-mist">Request</div>
+                  <div class="h-px w-14 bg-neon"></div>
+                  <div class="relative border border-neon bg-neon p-3 text-center text-xs font-bold uppercase text-black">
+                    Verify
+                    <span class="node-ping absolute -right-2 -top-2 h-4 w-4 border border-neon bg-black"></span>
+                  </div>
+                  <div class="h-px w-14 bg-neon"></div>
+                  <div class="border border-wire bg-panel p-3 text-center text-xs uppercase text-neon">Allowed context</div>
+                </div>
+                <div class="packet-allow absolute bottom-[37px] left-[28px] h-3 w-3 bg-neon"></div>
+                <div class="packet-allow absolute bottom-[37px] left-[28px] h-3 w-3 bg-neon" style="animation-delay:.95s"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="control" class="border-b border-wire bg-panel px-5 py-20 md:px-8 md:py-28">
+      <div class="mx-auto max-w-site">
+        <div class="mb-12 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+          <div>
+            <p class="mb-4 text-xs uppercase tracking-[0.32em] text-neon">The Control Layer</p>
+            <h2 class="font-headline text-4xl font-extrabold uppercase text-paper md:text-6xl">Permission checks happen before model context.</h2>
+          </div>
+          <p class="max-w-2xl leading-7 text-mist">Groundwork keeps the message simple for security leaders: identity is verified, access is checked, unsafe context is withheld, and the decision is recorded.</p>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-4">
+          <div class="border border-wire bg-black p-6">
+            <span class="material-symbols-outlined text-neon">badge</span>
+            <h3 class="mt-6 font-headline text-xl font-bold uppercase text-paper">Verified identity</h3>
+            <p class="mt-4 text-sm leading-6 text-mist">AI retrieval is tied to authenticated users, not self-declared request fields.</p>
+          </div>
+          <div class="border border-wire bg-black p-6">
+            <span class="material-symbols-outlined text-neon">policy</span>
+            <h3 class="mt-6 font-headline text-xl font-bold uppercase text-paper">Live access</h3>
+            <p class="mt-4 text-sm leading-6 text-mist">Access is evaluated at query time, so changed permissions affect AI output.</p>
+          </div>
+          <div class="border border-wire bg-black p-6">
+            <span class="material-symbols-outlined text-neon">block</span>
+            <h3 class="mt-6 font-headline text-xl font-bold uppercase text-paper">Fail closed</h3>
+            <p class="mt-4 text-sm leading-6 text-mist">If access cannot be confirmed, private context is not released.</p>
+          </div>
+          <div class="border border-neon bg-black p-6 neon-glow">
+            <span class="material-symbols-outlined text-neon">receipt_long</span>
+            <h3 class="mt-6 font-headline text-xl font-bold uppercase text-paper">Audit proof</h3>
+            <p class="mt-4 text-sm leading-6 text-mist">Every retrieval decision can be inspected by security and compliance teams.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="shadow" class="relative overflow-hidden border-b border-wire px-5 py-20 md:px-8 md:py-28">
+      <div class="absolute inset-0 bg-[radial-gradient(circle_at_20%_30%,rgba(112,223,4,.11),transparent_28%)]"></div>
+      <div class="relative mx-auto grid max-w-site gap-12 lg:grid-cols-[.9fr_1.1fr]">
+        <div>
+          <p class="mb-4 text-xs uppercase tracking-[0.32em] text-neon">Shadow Mode</p>
+          <h2 class="font-headline text-4xl font-extrabold uppercase text-paper md:text-6xl">Measure exposure before enforcement.</h2>
+          <p class="mt-7 max-w-xl leading-7 text-mist">Teams can observe AI retrieval, see what would have been blocked, and build internal confidence before switching into enforcement mode.</p>
+        </div>
+        <div class="border border-neon bg-black p-6 neon-glow">
+          <div class="mb-6 flex items-center justify-between border-b border-wire pb-4">
+            <span class="text-xs uppercase tracking-[0.24em] text-neon">Pilot report</span>
+            <span class="text-xs uppercase tracking-[0.24em] text-mist">Observe only</span>
+          </div>
+          <div class="grid gap-4 md:grid-cols-3">
+            <div class="border border-wire bg-panel p-5">
+              <p class="text-xs uppercase tracking-[0.2em] text-mist">Queries</p>
+              <p class="mt-5 text-3xl font-bold text-paper">12,480</p>
+            </div>
+            <div class="border border-wire bg-panel p-5">
+              <p class="text-xs uppercase tracking-[0.2em] text-mist">Would block</p>
+              <p class="mt-5 text-3xl font-bold text-neon">817</p>
+            </div>
+            <div class="border border-wire bg-panel p-5">
+              <p class="text-xs uppercase tracking-[0.2em] text-mist">Top area</p>
+              <p class="mt-5 text-2xl font-bold uppercase text-paper">Finance</p>
+            </div>
+          </div>
+          <div class="mt-5 border border-wire bg-panel p-5">
+            <div class="mb-3 flex justify-between text-xs uppercase tracking-[0.18em] text-mist"><span>Risk stream</span><span>Live sample</span></div>
+            <div class="space-y-2 text-xs uppercase tracking-[0.12em]">
+              <p class="border-l-2 border-risk pl-3 text-risk">Would block: payroll document requested by non-finance user</p>
+              <p class="border-l-2 border-neon pl-3 text-neon">Allowed: employee handbook retrieved for workspace user</p>
+              <p class="border-l-2 border-risk pl-3 text-risk">Would block: executive folder surfaced by semantic match</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="pilot" class="px-5 py-20 md:px-8 md:py-28">
+      <div class="mx-auto grid max-w-site gap-12 lg:grid-cols-[.88fr_1.12fr]">
+        <div>
+          <p class="mb-4 text-xs uppercase tracking-[0.32em] text-neon">Private Pilot</p>
+          <h2 class="font-headline text-4xl font-extrabold uppercase text-paper md:text-6xl">Bring controlled AI access to your enterprise data.</h2>
+          <p class="mt-7 max-w-xl leading-7 text-mist">We are prioritizing regulated teams that need proof, permission alignment, and a safe path from observation to enforcement.</p>
+        </div>
+        <form id="waitlist" class="border border-neon bg-panel p-5 neon-glow md:p-7">
+          <div class="mb-6 flex items-center justify-between border-b border-wire pb-4">
+            <p class="text-sm uppercase tracking-[0.24em] text-neon">Join Waitlist</p>
+            <p class="text-xs uppercase tracking-[0.18em] text-mist">Pilot access</p>
+          </div>
+          <div class="grid gap-4 md:grid-cols-2">
+            <label class="block">
+              <span class="mb-2 block text-xs uppercase tracking-[0.18em] text-mist">Work Email</span>
+              <input name="email" required type="email" class="w-full border border-wire bg-black p-4 text-sm text-paper focus:border-neon focus:ring-0" />
+            </label>
+            <label class="block">
+              <span class="mb-2 block text-xs uppercase tracking-[0.18em] text-mist">Company</span>
+              <input name="company" type="text" class="w-full border border-wire bg-black p-4 text-sm text-paper focus:border-neon focus:ring-0" />
+            </label>
+            <label class="block">
+              <span class="mb-2 block text-xs uppercase tracking-[0.18em] text-mist">Role</span>
+              <input name="role" type="text" class="w-full border border-wire bg-black p-4 text-sm text-paper focus:border-neon focus:ring-0" placeholder="CISO, Security, AI Platform" />
+            </label>
+            <label class="block">
+              <span class="mb-2 block text-xs uppercase tracking-[0.18em] text-mist">Primary Data Source</span>
+              <select name="data_source" class="w-full border border-wire bg-black p-4 text-sm text-paper focus:border-neon focus:ring-0">
+                <option>Microsoft 365</option>
+                <option>Google Workspace</option>
+                <option>Slack</option>
+                <option>Confluence / Jira</option>
+                <option>Other</option>
+              </select>
+            </label>
+          </div>
+          <button type="submit" class="mt-5 w-full border border-neon bg-neon px-7 py-4 text-sm font-extrabold uppercase tracking-[0.18em] text-black transition hover:bg-black hover:text-neon">Request Pilot Access</button>
+          <p id="waitlist-status" class="mt-4 min-h-6 text-xs uppercase tracking-[0.18em] text-mist"></p>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <footer class="border-t border-wire bg-panel px-5 py-8 md:px-8">
+    <div class="mx-auto flex max-w-site flex-col justify-between gap-6 md:flex-row md:items-center">
+      <div class="flex items-center gap-3">
+        <img src="assets/groundwork-logo-clean.png" alt="" class="h-9 w-9 object-contain" />
+        <div>
+          <p class="font-headline text-xl font-extrabold text-neon">GROUNDWORK.IO</p>
+          <p class="mt-1 text-xs uppercase tracking-[0.18em] text-mist">Runtime data access control for enterprise AI.</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-6 text-xs uppercase tracking-[0.18em] text-mist">
+        <a href="#exposure" class="hover:text-neon">Exposure</a>
+        <a href="#control" class="hover:text-neon">Control</a>
+        <a href="#shadow" class="hover:text-neon">Shadow Mode</a>
+        <a href="#pilot" class="hover:text-neon">Pilot</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const GROUNDWORK_SUPABASE_URL = "YOUR_SUPABASE_URL";
+    const GROUNDWORK_SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+
+    function configuredSupabase() {
+      return GROUNDWORK_SUPABASE_URL.startsWith("https://") &&
+        !GROUNDWORK_SUPABASE_URL.includes("YOUR_") &&
+        !GROUNDWORK_SUPABASE_ANON_KEY.includes("YOUR_");
+    }
+
+    const supabaseClient = configuredSupabase()
+      ? window.supabase.createClient(GROUNDWORK_SUPABASE_URL, GROUNDWORK_SUPABASE_ANON_KEY)
+      : null;
+
+    async function submitWaitlist(event, statusId) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const status = document.getElementById(statusId);
+      const button = form.querySelector("button[type='submit']");
+      const original = button.textContent;
+      const data = Object.fromEntries(new FormData(form).entries());
+      if (!data.email) return;
+
+      button.disabled = true;
+      button.textContent = "Submitting...";
+      status.textContent = "";
+
+      if (!supabaseClient) {
+        status.textContent = "Supabase is not configured yet. Add your project URL and anon key in code.html.";
+        button.disabled = false;
+        button.textContent = original;
+        return;
+      }
+
+      const payload = {
+        email: data.email,
+        company: data.company || null,
+        role: data.role || null,
+        data_source: data.data_source || null,
+        source: statusId === "hero-status" ? "hero" : "pilot_form"
+      };
+
+      const { error } = await supabaseClient.from("waitlist").insert([payload]);
+      if (error) {
+        console.error(error);
+        status.textContent = "Unable to submit. Check Supabase table and policies.";
+      } else {
+        form.reset();
+        status.textContent = "Request received. We will contact you for pilot access.";
+      }
+
+      button.disabled = false;
+      button.textContent = original;
+    }
+
+    document.getElementById("hero-waitlist").addEventListener("submit", (event) => submitWaitlist(event, "hero-status"));
+    document.getElementById("waitlist").addEventListener("submit", (event) => submitWaitlist(event, "waitlist-status"));
+
+    // Mobile menu toggle
+    const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+    const mobileMenu = document.getElementById('mobile-menu');
+    if (mobileMenuBtn && mobileMenu) {
+      mobileMenuBtn.addEventListener('click', () => {
+        mobileMenu.classList.toggle('hidden');
+      });
+      // Close mobile menu when clicking a link
+      document.querySelectorAll('#mobile-menu a').forEach(link => {
+        link.addEventListener('click', () => {
+          mobileMenu.classList.add('hidden');
+        });
+      });
+    }
+  </script>
+</body>
+</html>

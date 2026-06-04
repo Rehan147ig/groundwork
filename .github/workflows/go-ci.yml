@@ -1,0 +1,66 @@
+name: go-ci
+
+# Builds, formats, vets, and tests the Go query-runtime (race detector included).
+# Runs on every PR and on pushes to master. No path filter: this is a REQUIRED check,
+# and a path-filtered required check stays "pending" (blocking merges) on PRs that don't
+# touch its paths. Path-scoped skipping is a Phase 2 optimization (see docs/ci.md).
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-ci:
+    name: go-ci
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/query-runtime
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: services/query-runtime/go.mod
+          cache: false # cache is managed explicitly below, keyed on go.sum
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('services/query-runtime/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build
+        run: go build ./...
+
+      - name: gofmt (fail if any file is unformatted)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "gofmt: all files formatted"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Test (race detector)
+        run: go test -race ./...

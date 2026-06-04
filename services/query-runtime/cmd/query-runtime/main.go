@@ -91,6 +91,19 @@ func main() {
 	}
 	allowDemoIdentity := os.Getenv("ALLOW_DEMO_IDENTITY") == "true"
 
+	// Canonical identity (GROUNDWORK_CANONICAL_IDENTITY=true): resolve each verified end-user
+	// to a tenant-scoped principal so the engine checks user:principal:<uuid> instead of the
+	// raw token subject. The resolver is Postgres-backed in production and in-memory for
+	// local/demo; a short-TTL cache keeps the per-query alias lookup off the hot path. The
+	// flag (not the resolver) gates canonicalization, so demo/local mode keeps working when
+	// it is off, and a verified-but-unresolved identity fails closed when it is on.
+	canonicalIdentity := os.Getenv("GROUNDWORK_CANONICAL_IDENTITY") == "true"
+	resolver, closeResolver, err := buildPrincipalResolver(cfg.DatabaseURL, envDuration("GROUNDWORK_PRINCIPAL_CACHE_TTL_MS", time.Minute))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer closeResolver()
+
 	// MCP mode: run as stdio MCP server for AI agents (Claude Desktop, etc.)
 	if os.Getenv("GROUNDWORK_MCP") == "true" {
 		mcpServer := mcp.NewServer(
@@ -100,6 +113,7 @@ func main() {
 			identityVerifier,
 			allowDemoIdentity,
 		)
+		mcpServer.SetCanonicalIdentity(resolver, canonicalIdentity)
 		log.Println("groundwork MCP server starting (stdio transport)")
 		if err := mcpServer.Run(context.Background()); err != nil {
 			log.Fatal(err)
@@ -111,8 +125,10 @@ func main() {
 	// reuse the single engine `core`; /mcp authenticates with the same API key resolver.
 	server := runtime.NewServerWithExecutor(cfg, backend, apiKeys, core)
 	server.SetIdentity(identityVerifier, allowDemoIdentity)
+	server.SetCanonicalIdentity(resolver, canonicalIdentity)
 
 	mcpHTTP := mcp.NewHTTPServer(core, apiKeys, identityVerifier, allowDemoIdentity)
+	mcpHTTP.SetCanonicalIdentity(resolver, canonicalIdentity)
 	root := http.NewServeMux()
 	root.Handle("/", server.Routes())
 	root.Handle("/mcp", mcpHTTP)
@@ -177,6 +193,22 @@ func buildAuditWriter(databaseURL string, backend runtime.Backend) (engine.Audit
 		return nil, func() {}, err
 	}
 	return engine.NewPostgresAuditWriter(db), func() { _ = db.Close() }, nil
+}
+
+// buildPrincipalResolver constructs the canonical principal resolver: the Postgres-backed
+// resolver when DATABASE_URL is set (production), otherwise an in-memory resolver for
+// local/demo. Both are wrapped in a short-TTL caching resolver so the per-query alias
+// lookup does not hit the database on every request. The resolver is always non-nil — the
+// GROUNDWORK_CANONICAL_IDENTITY flag, not the resolver, decides whether canonicalization runs.
+func buildPrincipalResolver(databaseURL string, ttl time.Duration) (runtime.PrincipalResolver, func(), error) {
+	if databaseURL == "" {
+		return runtime.NewCachingResolver(runtime.NewMemoryPrincipalResolver(), ttl), func() {}, nil
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return runtime.NewCachingResolver(runtime.NewPostgresPrincipalResolver(db), ttl), func() { _ = db.Close() }, nil
 }
 
 // auditTimeoutDefault gives the synchronous audit write a realistic budget: a tight

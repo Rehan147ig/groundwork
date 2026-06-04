@@ -25,6 +25,8 @@ type Server struct {
 	executor          QueryExecutor
 	identity          IdentityVerifier
 	allowDemoIdentity bool
+	resolver          PrincipalResolver
+	canonicalIdentity bool
 }
 
 // SetIdentity wires the end-user identity verifier and the demo-identity switch.
@@ -32,6 +34,18 @@ type Server struct {
 func (s *Server) SetIdentity(verifier IdentityVerifier, allowDemo bool) {
 	s.identity = verifier
 	s.allowDemoIdentity = allowDemo
+}
+
+// SetCanonicalIdentity wires the canonical principal resolver and the feature flag
+// (GROUNDWORK_CANONICAL_IDENTITY=true). When enabled, a verified end-user identity is
+// resolved to a tenant-scoped canonical principal so the engine checks
+// user:principal:<uuid>. A verified identity that resolves to no principal fails
+// closed (identity_unresolved) — it never silently downgrades to the raw user id.
+// Demo / unverified identities are always skipped (raw user id kept), so local mode
+// keeps working whether or not the flag is set.
+func (s *Server) SetCanonicalIdentity(resolver PrincipalResolver, canonical bool) {
+	s.resolver = resolver
+	s.canonicalIdentity = canonical
 }
 
 type QueryExecutor interface {
@@ -104,7 +118,15 @@ func (s *Server) query(w http.ResponseWriter, r *http.Request) {
 	// mode (ALLOW_DEMO_IDENTITY=true). tenant_id/region above come solely from the
 	// API key and are never taken from the request body.
 	if decision, ok := identityFromContext(r.Context()); ok && decision.identity.Verified {
-		req.UserID = decision.identity.UserID
+		// Canonicalize the verified identity to a tenant-scoped principal when the
+		// feature flag is on. When off (or for demo/unverified identities) this returns
+		// the raw user id unchanged. A verified-but-unresolved identity fails closed.
+		effectiveUserID, _, err := CanonicalizeIdentity(r.Context(), s.resolver, s.canonicalIdentity, tenant.TenantID, decision.identity)
+		if err != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "identity_unresolved"})
+			return
+		}
+		req.UserID = effectiveUserID
 	}
 	if req.Question == "" || req.UserID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "question and a verified user identity are required"})

@@ -21,13 +21,25 @@ import (
 
 // Server is the MCP server that wraps the Groundwork Engine.
 type Server struct {
-	engine    *engine.Engine
-	tenantID  string
-	region    string
-	verifier  runtime.IdentityVerifier
-	allowDemo bool
-	writer    io.Writer
-	mu        sync.Mutex
+	engine            *engine.Engine
+	tenantID          string
+	region            string
+	verifier          runtime.IdentityVerifier
+	allowDemo         bool
+	resolver          runtime.PrincipalResolver
+	canonicalIdentity bool
+	writer            io.Writer
+	mu                sync.Mutex
+}
+
+// SetCanonicalIdentity wires the canonical principal resolver and the feature flag
+// (GROUNDWORK_CANONICAL_IDENTITY=true), matching the REST runtime. When enabled, a
+// verified end-user is resolved to a tenant-scoped principal and the engine checks
+// user:principal:<uuid>; a verified-but-unresolved identity fails closed with no
+// documents. Demo / unverified identities are skipped (raw user id kept).
+func (s *Server) SetCanonicalIdentity(resolver runtime.PrincipalResolver, canonical bool) {
+	s.resolver = resolver
+	s.canonicalIdentity = canonical
 }
 
 // NewServer creates an MCP server bound to a specific tenant context.
@@ -273,10 +285,24 @@ func (s *Server) executeSearch(ctx context.Context, tenantID, region, assertionT
 		}, nil
 	}
 
+	// Canonicalize the verified identity to a tenant-scoped principal when the feature
+	// flag is on (off / demo identities keep the raw user id). A verified identity that
+	// resolves to no known principal fails closed — no query runs, no documents returned.
+	effectiveUserID, _, err := runtime.CanonicalizeIdentity(ctx, s.resolver, s.canonicalIdentity, tenantID, identity)
+	if err != nil {
+		return mcpToolResult{
+			Content: []mcpContent{{
+				Type: "text",
+				Text: "FAIL CLOSED: the verified end-user identity could not be resolved to a known principal (identity_unresolved).\n\nNo query was executed and no documents were returned.",
+			}},
+			IsError: true,
+		}, nil
+	}
+
 	queryReq := runtime.QueryRequest{
 		TenantID: tenantID,
 		Region:   region,
-		UserID:   identity.UserID,
+		UserID:   effectiveUserID,
 		Question: args.Question,
 	}
 

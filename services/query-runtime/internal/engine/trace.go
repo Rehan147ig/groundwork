@@ -31,8 +31,15 @@ type AuditEntry struct {
 	DecisionMode        string
 	ACLDecision         string
 	Reason              string
-	ImmutableDigest     string
-	PreviousHash        string
+	// IdentityResolution records how the query-time identity was resolved when
+	// canonical identity is enabled: "" (canonical off / not applicable), "skipped",
+	// "resolved", or "unresolved". PrincipalID is the canonical principal UUID when
+	// the identity resolved to user:principal:<uuid> (empty otherwise). Both feed the
+	// immutable digest so an attacker cannot rewrite whose permissions were used.
+	IdentityResolution string
+	PrincipalID        string
+	ImmutableDigest    string
+	PreviousHash       string
 }
 
 func ComputeDigest(entry AuditEntry) string {
@@ -58,6 +65,8 @@ func ComputeDigest(entry AuditEntry) string {
 		entry.DecisionMode,
 		entry.ACLDecision,
 		entry.Reason,
+		entry.IdentityResolution,
+		entry.PrincipalID,
 		entry.PreviousHash,
 	}, "\x1f")
 	sum := sha256.Sum256([]byte(payload))
@@ -135,10 +144,12 @@ func (p *PostgresAuditWriter) Write(ctx context.Context, entry AuditEntry) error
 			decision_mode,
 			acl_decision,
 			reason,
+			identity_resolution,
+			principal_id,
 			immutable_digest,
 			previous_hash
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 	`,
 		entry.TraceID,
 		entry.TenantID,
@@ -160,6 +171,8 @@ func (p *PostgresAuditWriter) Write(ctx context.Context, entry AuditEntry) error
 		entry.DecisionMode,
 		entry.ACLDecision,
 		entry.Reason,
+		entry.IdentityResolution,
+		entry.PrincipalID,
 		entry.ImmutableDigest,
 		nullString(entry.PreviousHash),
 	); err != nil {
@@ -242,6 +255,7 @@ func LoadAuditChain(ctx context.Context, db *sql.DB, tenantID string) ([]AuditEn
 		       fail_closed, fail_stage, error_code, error_message,
 		       openfga_latency_ms, qdrant_latency_ms, total_latency_ms,
 		       circuit_breaker_state, decision_mode, acl_decision, reason,
+		       identity_resolution, principal_id,
 		       immutable_digest, previous_hash
 		FROM audit_log
 		WHERE tenant_id = $1
@@ -262,6 +276,7 @@ func LoadAuditChain(ctx context.Context, db *sql.DB, tenantID string) ([]AuditEn
 			&e.FailClosed, &failStage, &errorCode, &errorMessage,
 			&openfga, &qdrant, &e.TotalLatencyMs,
 			&e.CircuitBreakerState, &e.DecisionMode, &e.ACLDecision, &e.Reason,
+			&e.IdentityResolution, &e.PrincipalID,
 			&e.ImmutableDigest, &previousHash,
 		); err != nil {
 			return nil, err

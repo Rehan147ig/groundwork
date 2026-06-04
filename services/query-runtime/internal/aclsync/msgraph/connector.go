@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"groundwork/query-runtime/internal/aclsync"
+	"groundwork/query-runtime/internal/runtime"
 )
 
 // Connector implements aclsync.Connector against Microsoft Graph (Entra + SharePoint).
@@ -15,6 +16,22 @@ type Connector struct {
 	cfg    Config
 	logger *slog.Logger
 	delta  DeltaTokenStore
+
+	// resolver + canonical drive canonical-principal sync. When canonical is true the
+	// connector resolves every directory user to a tenant-scoped principal, upserts its
+	// verified aliases, and emits user:principal:<uuid> tuples (see Snapshot). When false
+	// it emits raw user:<mail|upn|id> tuples exactly as before (demo / pre-migration mode).
+	resolver  runtime.PrincipalResolver
+	canonical bool
+}
+
+// SetCanonicalIdentity enables canonical-principal sync: the connector pre-provisions a
+// principal (and its entra:id / jwt:email / jwt:preferred_username aliases) for every
+// directory user and emits canonical user:principal:<uuid> tuples. With canonical=false
+// (or a nil resolver) the connector keeps emitting raw user-key tuples.
+func (c *Connector) SetCanonicalIdentity(resolver runtime.PrincipalResolver, canonical bool) {
+	c.resolver = resolver
+	c.canonical = canonical
 }
 
 // NewConnector builds a Graph connector from a GraphClient (real or fake) and config.
@@ -44,10 +61,34 @@ func (c *Connector) Snapshot(ctx context.Context, tenantID string) (aclsync.Perm
 	ps := aclsync.PermissionSet{TenantID: tenantID, Users: mapUsers(users)}
 	byID := userKeyByID(users)
 
+	// Canonical mode pre-provisions a principal for every directory user up front (so even
+	// users with no current grant can authenticate later) and records userKey -> principal
+	// for the rewrite below. Directory users are observed first, so group members and
+	// grantees that are directory users collapse onto the same principal.
+	var canon *canonicalizer
+	if c.canonical && c.resolver != nil {
+		canon = newCanonicalizer(ctx, c.resolver, tenantID)
+		for _, u := range users {
+			if err := canon.observe(u.Mail, u.UserPrincipalName, u.ID); err != nil {
+				return aclsync.PermissionSet{}, err
+			}
+		}
+	}
+
 	for _, g := range groups {
 		members, err := c.client.ListGroupMembers(ctx, g.ID)
 		if err != nil {
 			return aclsync.PermissionSet{}, err
+		}
+		if canon != nil {
+			for _, m := range members {
+				if m.Type == MemberGroup {
+					continue
+				}
+				if err := canon.observe(m.Mail, m.UserPrincipalName, m.ID); err != nil {
+					return aclsync.PermissionSet{}, err
+				}
+			}
 		}
 		ps.Groups = append(ps.Groups, mapGroup(g, members))
 	}
@@ -61,13 +102,41 @@ func (c *Connector) Snapshot(ctx context.Context, tenantID string) (aclsync.Perm
 		if err != nil {
 			return aclsync.PermissionSet{}, err
 		}
+		if canon != nil {
+			if err := c.observeGrantees(canon, perms, byID); err != nil {
+				return aclsync.PermissionSet{}, err
+			}
+		}
 		if it.IsFolder {
 			ps.Folders = append(ps.Folders, mapFolder(it, perms, byID))
 		} else {
 			ps.Documents = append(ps.Documents, mapDocument(it, perms, byID))
 		}
 	}
+
+	if canon != nil {
+		canon.rewrite(&ps)
+	}
 	return ps, nil
+}
+
+// observeGrantees pre-provisions principals for SharePoint permission grantees. Grantees that
+// are directory users were already observed (keyed by the directory userKey via byID), so we
+// only need to observe non-directory grantees here, using the same (mail, upn, id) inputs
+// granteesFromPerms uses to form their userKey — keeping observation and rewrite aligned.
+func (c *Connector) observeGrantees(canon *canonicalizer, perms []GraphPermission, byID map[string]string) error {
+	for _, p := range perms {
+		if !grantsRead(p.Roles) || p.Grantee.UserID == "" && p.Grantee.UserMail == "" && p.Grantee.UserUPN == "" {
+			continue
+		}
+		if _, ok := byID[p.Grantee.UserID]; ok {
+			continue // directory user, already observed with its full directory identity
+		}
+		if err := canon.observe(p.Grantee.UserMail, p.Grantee.UserUPN, p.Grantee.UserID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Connector) ListDocuments(ctx context.Context, _ string) ([]aclsync.Document, error) {

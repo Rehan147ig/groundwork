@@ -292,6 +292,65 @@ func TestQueryTenantStillFromAPIKeyWithJWT(t *testing.T) {
 	}
 }
 
+// newCanonicalProdServer is a production-mode server (verified identity required) with the
+// canonical principal resolver wired and GROUNDWORK_CANONICAL_IDENTITY effectively on.
+func newCanonicalProdServer(resolver PrincipalResolver) *Server {
+	backend := NewMemoryBackend()
+	apiKeys := NewMemoryAPIKeyResolver("gw_test_key", TenantContext{TenantID: "tenant_demo", Region: "uk", KeyName: "test"})
+	s := NewServerWithExecutor(Config{}, backend, apiKeys, &mockExecutor{})
+	s.SetIdentity(hs256Verifier("server-secret"), false)
+	s.SetCanonicalIdentity(resolver, true)
+	return s
+}
+
+// /v1/query with canonical identity on: the verified token's subject resolves to a canonical
+// principal and the engine sees user_id = "principal:<uuid>" (never the raw subject or body).
+func TestQueryCanonicalIdentityResolvesPrincipal(t *testing.T) {
+	r := NewMemoryPrincipalResolver()
+	r.Seed("tenant_demo", "p-alice", []IdentityAssertion{va("jwt:sub", "alice@corp.com")})
+	server := newCanonicalProdServer(r)
+	token := signHS256(t, "server-secret", jwt.MapClaims{"sub": "alice@corp.com", "exp": time.Now().Add(time.Hour).Unix()})
+
+	body := `{"user_id":"attacker","question":"q"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	req.Header.Set("X-Groundwork-User-Assertion", token)
+	rec := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"user_id":"principal:p-alice"`) {
+		t.Fatalf("expected canonical principal user id, got %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "alice@corp.com") || strings.Contains(rec.Body.String(), "attacker") {
+		t.Fatalf("raw subject/body user_id must not survive canonicalization: %s", rec.Body.String())
+	}
+}
+
+// /v1/query with canonical identity on and a verified-but-unknown identity must fail closed
+// (identity_unresolved) — it must never silently downgrade to the raw token subject.
+func TestQueryCanonicalUnresolvedFailsClosed(t *testing.T) {
+	server := newCanonicalProdServer(NewMemoryPrincipalResolver()) // empty resolver: nothing resolves
+	token := signHS256(t, "server-secret", jwt.MapClaims{"sub": "nobody@corp.com", "exp": time.Now().Add(time.Hour).Unix()})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(`{"question":"q"}`))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	req.Header.Set("X-Groundwork-User-Assertion", token)
+	rec := httptest.NewRecorder()
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 identity_unresolved, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "identity_unresolved") {
+		t.Fatalf("expected identity_unresolved error body, got %s", rec.Body.String())
+	}
+}
+
 func TestQueryDemoModeAllowsBodyUserID(t *testing.T) {
 	server := newTestServer(Config{}) // demo identity enabled
 

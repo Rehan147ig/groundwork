@@ -23,6 +23,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"net/http"
 	"os"
@@ -36,6 +37,9 @@ import (
 	"groundwork/query-runtime/internal/aclsync"
 	"groundwork/query-runtime/internal/aclsync/msgraph"
 	"groundwork/query-runtime/internal/metrics"
+	"groundwork/query-runtime/internal/runtime"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
@@ -48,10 +52,30 @@ func main() {
 		DriftCheckInterval: time.Duration(envInt("ACL_DRIFT_CHECK_INTERVAL_SECONDS", 300)) * time.Second,
 	}
 
+	// Canonical identity: when enabled, the connector pre-provisions a tenant-scoped principal
+	// (and its verified aliases) for every directory user and emits user:principal:<uuid>
+	// tuples. The resolver must share the query runtime's Postgres (DATABASE_URL) so the
+	// aliases the sync writes are the same ones the runtime resolves at query time.
+	canonicalIdentity := os.Getenv("GROUNDWORK_CANONICAL_IDENTITY") == "true"
+	var resolver runtime.PrincipalResolver
+	closeResolver := func() {}
+	if canonicalIdentity {
+		var err error
+		resolver, closeResolver, err = buildSyncResolver(os.Getenv("DATABASE_URL"), logger)
+		if err != nil {
+			logger.Error("failed to build principal resolver", "err", err)
+			os.Exit(1)
+		}
+	}
+	defer closeResolver()
+
 	connectorType := env("ACL_CONNECTOR_TYPE", "mock")
 	var connector aclsync.Connector
 	switch connectorType {
 	case "mock":
+		if canonicalIdentity {
+			logger.Warn("GROUNDWORK_CANONICAL_IDENTITY=true but connector is mock; mock emits raw user tuples (canonical principals are only synced by real connectors)")
+		}
 		connector = aclsync.NewMockConnector()
 	case "msgraph":
 		if os.Getenv("MS_GRAPH_CONNECTOR_ENABLED") != "true" {
@@ -73,8 +97,10 @@ func main() {
 			deltaStore = msgraph.NewFileDeltaTokenStore(dir)
 		}
 		// Secrets are never logged; only non-sensitive identifiers.
-		connector = msgraph.NewConnector(msgraph.NewHTTPGraphClient(graphCfg), graphCfg, logger, deltaStore)
-		logger.Info("acl-sync using Microsoft Graph connector", "site_id", graphCfg.SiteID, "drive_id", graphCfg.DriveID)
+		graphConnector := msgraph.NewConnector(msgraph.NewHTTPGraphClient(graphCfg), graphCfg, logger, deltaStore)
+		graphConnector.SetCanonicalIdentity(resolver, canonicalIdentity)
+		connector = graphConnector
+		logger.Info("acl-sync using Microsoft Graph connector", "site_id", graphCfg.SiteID, "drive_id", graphCfg.DriveID, "canonical_identity", canonicalIdentity)
 	default:
 		logger.Error("unsupported connector type", "type", connectorType, "supported", "mock|msgraph")
 		os.Exit(1)
@@ -123,6 +149,22 @@ func (promMetrics) SyncRun(t string)                       { metrics.RecordACLSy
 func (promMetrics) SyncError(t string)                     { metrics.RecordACLSyncError(t) }
 func (promMetrics) DriftItems(t string, n int)             { metrics.SetACLSyncDriftItems(t, n) }
 func (promMetrics) SyncDuration(t string, d time.Duration) { metrics.RecordACLSyncDuration(t, d) }
+
+// buildSyncResolver builds the principal resolver the connector uses to mint principals and
+// write aliases. It is Postgres-backed when DATABASE_URL is set (shared with the query
+// runtime), otherwise an in-memory resolver for local/demo (not shared across processes —
+// canonical sync against an in-memory resolver only makes sense in a single-process test).
+func buildSyncResolver(databaseURL string, logger *slog.Logger) (runtime.PrincipalResolver, func(), error) {
+	if databaseURL == "" {
+		logger.Warn("GROUNDWORK_CANONICAL_IDENTITY=true but DATABASE_URL is unset; using in-memory principal resolver (dev only, aliases are NOT shared with the query runtime)")
+		return runtime.NewMemoryPrincipalResolver(), func() {}, nil
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return runtime.NewPostgresPrincipalResolver(db), func() { _ = db.Close() }, nil
+}
 
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

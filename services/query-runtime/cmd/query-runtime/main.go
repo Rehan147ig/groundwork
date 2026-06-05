@@ -128,12 +128,18 @@ func main() {
 
 	// HTTP mode: REST API + the Cloud MCP endpoint (/mcp) on the same listener. Both
 	// reuse the single engine `core`; /mcp authenticates with the same API key resolver.
+	// Per-API-key rate limiting (enforces each key's rate_limit_rpm). One shared limiter so a
+	// key's budget is consistent across the REST and Cloud MCP endpoints.
+	rateLimiter := runtime.NewRateLimiter()
+
 	server := runtime.NewServerWithExecutor(cfg, backend, apiKeys, core)
 	server.SetIdentity(identityVerifier, allowDemoIdentity)
 	server.SetCanonicalIdentity(resolver, canonicalIdentity)
+	server.SetRateLimiter(rateLimiter)
 
 	mcpHTTP := mcp.NewHTTPServer(core, apiKeys, identityVerifier, allowDemoIdentity)
 	mcpHTTP.SetCanonicalIdentity(resolver, canonicalIdentity)
+	mcpHTTP.SetRateLimiter(rateLimiter)
 	root := http.NewServeMux()
 	root.Handle("/", server.Routes())
 	root.Handle("/mcp", mcpHTTP)

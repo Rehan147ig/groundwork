@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +21,12 @@ import (
 type HTTPServer struct {
 	mcp     *Server
 	apiKeys runtime.APIKeyResolver
+	limiter *runtime.RateLimiter
 }
+
+// SetRateLimiter wires the per-API-key request/minute limiter for the Cloud MCP endpoint,
+// matching the REST runtime. nil disables limiting.
+func (h *HTTPServer) SetRateLimiter(rl *runtime.RateLimiter) { h.limiter = rl }
 
 // NewHTTPServer builds the Cloud MCP HTTP endpoint. tenant_id/region are resolved per
 // request from the Groundwork API key (never from the request body or tool arguments);
@@ -70,6 +76,11 @@ func (h *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !runtime.HasScope(tenant, "query") {
 		writeJSONStatus(w, http.StatusForbidden, map[string]string{"error": "insufficient_scope"})
+		return
+	}
+	if ok, retryAfter := h.limiter.Allow(tenant.KeyID, tenant.RateLimitRPM); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())+1))
+		writeJSONStatus(w, http.StatusTooManyRequests, map[string]string{"error": "rate_limit_exceeded"})
 		return
 	}
 

@@ -54,7 +54,8 @@ Groundwork enforces permissions at query time, not ingestion time. If a user's a
 
 - Prompt injection scanner (not a core feature, basic sanitisation only)
 - Cross-encoder reranking
-- SharePoint / Google Drive / Slack connectors
+- Google Drive / Slack connectors
+- Production OAuth rollout for enterprise connectors
 - SOC 2 certification
 - HIPAA BAA
 - FedRAMP
@@ -69,7 +70,7 @@ AI app calls `/v1/query` instead of calling Qdrant directly.
 
 ### Pattern B: MCP Server
 
-AI agents and tools like Cursor or Claude Desktop connect via Model Context Protocol. This is planned.
+AI agents and tools like Cursor or Claude Desktop connect via Model Context Protocol through the shared Groundwork runtime path.
 
 ### Pattern C: Sidecar Proxy
 
@@ -81,9 +82,7 @@ The following are not current production capabilities:
 
 - Prompt injection scanner as a primary feature
 - Reranking as a v1 feature
-- Microsoft 365 OAuth connector as current
 - Multi-region physical deployment as current
-- SharePoint connector
 - Google Drive connector
 - Slack connector
 - Redis ACL cache

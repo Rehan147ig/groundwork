@@ -31,7 +31,7 @@ AI app calls `/v1/query` instead of calling Qdrant directly. Groundwork retrieve
 
 ### Pattern B: MCP Server
 
-AI agents and tools like Cursor or Claude Desktop connect via Model Context Protocol. This is planned. The MCP transport should call the same protocol-agnostic Go engine as the REST API.
+AI agents and tools like Cursor or Claude Desktop connect through Groundwork's MCP transport. MCP and REST share the same Go engine path, so identity verification, tenant resolution, OpenFGA checks, shadow mode, and audit behavior stay identical across transports.
 
 ### Pattern C: Sidecar Proxy
 
@@ -41,7 +41,7 @@ Groundwork intercepts traffic between an AI app and vector DB at the network lev
 
 - Prompt injection scanner (not a core feature, basic sanitisation only)
 - Cross-encoder reranking
-- SharePoint / Google Drive / Slack connectors
+- Google Drive / Slack connectors
 - SOC 2 certification
 - HIPAA BAA
 - FedRAMP
@@ -51,27 +51,32 @@ Groundwork intercepts traffic between an AI app and vector DB at the network lev
 ## Current Repository Layout
 
 ```txt
-apps/console                 Next.js CISO dashboard and live ACL test screen
-services/query-runtime        Go runtime gateway and security enforcement path
-services/ingestion            Python parser, chunker, embedding, and dual-index writer
-packages/contracts            Shared API contracts and schemas
-infra/docker-compose.yml      Local development infrastructure
-docs/architecture.md          Architecture and integration notes
-docs/groundwork-production-conditions.md Production boundaries and readiness criteria
+apps/console                         Next.js admin console and live ACL test screen
+apps/marketing-site                  Public waitlist / marketing website
+services/query-runtime               Go runtime gateway, MCP server, OpenFGA checks, audit, identity
+services/ingestion                   Python parser, chunker, embedding, and dual-index writer
+packages/contracts                   Shared API contracts and schemas
+examples/                            Demo clients and integration examples
+infra/docker-compose.yml             Local development infrastructure
+infra/docker-compose.prod.yml        Non-bypassable production-style deployment profile
+infra/helm/groundwork                Early Kubernetes / Helm packaging
+migrations/                          Postgres schema migrations
+scripts/                             Validation, demo, migration, and integration helper scripts
+docs/                                Architecture, security, CI, deployment, and connector documentation
+docs/business/                       Pitch and investor-facing business material
+docs/archive/                        Older long-form planning artifacts kept out of the repo root
 ```
 
 ## Roadmap Items
 
 The following are roadmap items, not current production capabilities:
 
-- MCP server transport
-- Microsoft 365 / SharePoint OAuth connector
 - Google Drive connector
 - Slack connector
 - Multi-region physical cloud deployment
 - Cross-encoder reranking
 - Full prompt injection scanner
-- OCI / Helm production deployment
+- OCI production deployment
 - Redis ACL cache
 
 ## Local Development

@@ -53,7 +53,7 @@ AI app calls `/v1/query` instead of calling Qdrant directly. This is the current
 
 ### Pattern B: MCP Server
 
-AI agents and tools like Cursor or Claude Desktop connect via Model Context Protocol. This is planned. The MCP server should wrap the same protocol-agnostic Go engine used by the REST API so security behavior remains identical across transports.
+AI agents and tools like Cursor or Claude Desktop connect via Model Context Protocol. The MCP transport wraps the same Go engine used by the REST API so security behavior remains identical across transports.
 
 ### Pattern C: Sidecar Proxy
 
@@ -64,10 +64,13 @@ Groundwork intercepts traffic between an AI app and vector DB at the network lev
 ### Current V1 Capabilities
 
 - REST `/v1/query` runtime path
+- MCP runtime path
 - Qdrant vector candidate retrieval
 - OpenFGA query-time authorization
 - Fail-closed behavior when retrieval or authorization is unavailable
 - Circuit breaker around Qdrant retrieval
+- Canonical principal resolver for tenant-scoped identity alignment
+- Microsoft Graph ACL sync framework and connector mapping
 - Python local file ingestion
 - fastembed embeddings
 - Atomic dual-write to Qdrant and Elasticsearch
@@ -77,7 +80,8 @@ Groundwork intercepts traffic between an AI app and vector DB at the network lev
 
 - Prompt injection scanner (not a core feature, basic sanitisation only)
 - Cross-encoder reranking
-- SharePoint / Google Drive / Slack connectors
+- Google Drive / Slack connectors
+- Production OAuth rollout for enterprise connectors
 - SOC 2 certification
 - HIPAA BAA
 - FedRAMP
@@ -90,7 +94,6 @@ The following must be described as roadmap items, not current capabilities:
 
 - Prompt injection scanner as a primary feature
 - Reranking as a v1 feature
-- Microsoft 365 OAuth connector as current
 - Multi-region physical deployment as current
 
 Groundwork currently supports region and tenant enforcement in its contracts and runtime checks. Physical multi-region cloud deployment is a roadmap deployment package.

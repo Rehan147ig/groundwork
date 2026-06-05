@@ -53,3 +53,17 @@ func (r RuntimeTraceAuditWriter) Write(ctx context.Context, entry AuditEntry) er
 func NewPostgresAuditWriter(db *sql.DB) *PostgresAuditWriter {
 	return &PostgresAuditWriter{db: db, timeout: 30 * time.Millisecond}
 }
+
+// NewPostgresAuditWriterWithTimeout is NewPostgresAuditWriter with a caller-supplied
+// per-write timeout. The default constructor uses a tight 30ms budget — fine for the
+// in-memory store, but for a real Postgres round-trip (advisory lock + select + insert) it
+// can be too small and, because Write derives its own context from this timeout, it silently
+// caps the engine's larger AUDIT_TIMEOUT_MS. Integration tests and production deployments
+// against managed Postgres should pass a realistic value (e.g. 2s). A non-positive timeout
+// falls back to 2s.
+func NewPostgresAuditWriterWithTimeout(db *sql.DB, timeout time.Duration) *PostgresAuditWriter {
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	return &PostgresAuditWriter{db: db, timeout: timeout}
+}

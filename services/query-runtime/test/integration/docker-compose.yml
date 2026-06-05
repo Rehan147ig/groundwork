@@ -1,0 +1,41 @@
+# Live backends for Groundwork's integration tests: OpenFGA (authorization), Postgres
+# (immutable audit ledger), and Qdrant (vector retrieval). This is NOT the app stack — it
+# brings up only the dependencies the integration tests talk to. Bring it up via
+# scripts/integration-test.sh, which exports the GROUNDWORK_TEST_* env the tests read.
+#
+# Datastores are ephemeral (tmpfs / no volumes): every run starts clean, which is what the
+# deterministic audit-chain assertions rely on.
+name: groundwork-integration
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: groundwork
+      POSTGRES_PASSWORD: groundwork
+      POSTGRES_DB: groundwork
+    ports:
+      - "5432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U groundwork -d groundwork"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  openfga:
+    # Pin a specific version (e.g. openfga/openfga:v1.8.0) for fully reproducible CI.
+    image: openfga/openfga:latest
+    command: run
+    environment:
+      OPENFGA_DATASTORE_ENGINE: memory
+      OPENFGA_LOG_LEVEL: error
+    ports:
+      - "8080:8080" # HTTP API (the tests + OpenFGAChecker use REST)
+
+  qdrant:
+    # Pin a specific version for fully reproducible CI.
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333" # REST API

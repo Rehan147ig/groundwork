@@ -23,7 +23,13 @@ type Server struct {
 	allowDemoIdentity bool
 	resolver          PrincipalResolver
 	canonicalIdentity bool
+	limiter           *RateLimiter
 }
+
+// SetRateLimiter wires the per-API-key request/minute limiter. When set, authenticated
+// requests that exceed their key's rate_limit_rpm budget are rejected with 429. When unset
+// (nil), no limiting is applied — so local/demo and existing tests are unaffected.
+func (s *Server) SetRateLimiter(rl *RateLimiter) { s.limiter = rl }
 
 // SetIdentity wires the end-user identity verifier and the demo-identity switch.
 // When allowDemo is false and no valid assertion is present, /v1/query fails closed.
@@ -249,6 +255,11 @@ func (s *Server) requireAPIKey(scope string, next http.HandlerFunc) http.Handler
 		}
 		if !hasScope(tenant, scope) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "insufficient_scope"})
+			return
+		}
+		if ok, retryAfter := s.limiter.Allow(tenant.KeyID, tenant.RateLimitRPM); !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())+1))
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate_limit_exceeded"})
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), tenantContextKey{}, tenant)))

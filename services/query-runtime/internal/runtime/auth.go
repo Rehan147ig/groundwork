@@ -21,11 +21,12 @@ var ErrInvalidAPIKey = errors.New("invalid api key")
 var ErrAPIKeyManagementUnavailable = errors.New("api key management unavailable")
 
 type TenantContext struct {
-	TenantID string
-	Region   string
-	KeyName  string
-	Scopes   []string
-	KeyID    int64
+	TenantID     string
+	Region       string
+	KeyName      string
+	Scopes       []string
+	KeyID        int64
+	RateLimitRPM int // per-key requests/minute budget; 0 means unlimited
 }
 
 type APIKeyResolver interface {
@@ -91,11 +92,12 @@ func (m *MemoryAPIKeyResolver) Create(ctx context.Context, tenant TenantContext,
 	m.next++
 	id := m.next
 	m.keys[hashAPIKey(rawKey)] = TenantContext{
-		TenantID: tenant.TenantID,
-		Region:   tenant.Region,
-		KeyName:  req.Name,
-		Scopes:   req.Scopes,
-		KeyID:    id,
+		TenantID:     tenant.TenantID,
+		Region:       tenant.Region,
+		KeyName:      req.Name,
+		Scopes:       req.Scopes,
+		KeyID:        id,
+		RateLimitRPM: req.RateLimitRPM,
 	}
 	return CreateAPIKeyResponse{
 		ID:           id,
@@ -173,17 +175,17 @@ func (p *PostgresAPIKeyResolver) Resolve(ctx context.Context, rawKey string) (Te
 	var tenant TenantContext
 	var scopesText string
 	err := p.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, region, name, scopes
+		SELECT id, tenant_id, region, name, scopes, rate_limit_rpm
 		FROM api_keys
 		WHERE key_hash = $1 AND active = TRUE AND revoked_at IS NULL
-	`, hashAPIKey(rawKey)).Scan(&tenant.KeyID, &tenant.TenantID, &tenant.Region, &tenant.KeyName, &scopesText)
+	`, hashAPIKey(rawKey)).Scan(&tenant.KeyID, &tenant.TenantID, &tenant.Region, &tenant.KeyName, &scopesText, &tenant.RateLimitRPM)
 	if err != nil {
 		prefix := apiKeyPrefix(rawKey)
 		if prefix == "" {
 			return TenantContext{}, ErrInvalidAPIKey
 		}
 		rows, err := p.pool.Query(ctx, `
-			SELECT id, key_hash, tenant_id, region, name, scopes
+			SELECT id, key_hash, tenant_id, region, name, scopes, rate_limit_rpm
 			FROM api_keys
 			WHERE key_prefix = $1 AND active = TRUE AND revoked_at IS NULL
 		`, prefix)
@@ -193,7 +195,7 @@ func (p *PostgresAPIKeyResolver) Resolve(ctx context.Context, rawKey string) (Te
 		defer rows.Close()
 		var keyHash string
 		for rows.Next() {
-			if err := rows.Scan(&tenant.KeyID, &keyHash, &tenant.TenantID, &tenant.Region, &tenant.KeyName, &scopesText); err != nil {
+			if err := rows.Scan(&tenant.KeyID, &keyHash, &tenant.TenantID, &tenant.Region, &tenant.KeyName, &scopesText, &tenant.RateLimitRPM); err != nil {
 				continue
 			}
 			if bcrypt.CompareHashAndPassword([]byte(keyHash), []byte(rawKey)) == nil {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -92,9 +93,13 @@ func NewHTTPBackend(qdrantURL string, qdrantCollection string, elasticURL string
 		backendCfg.CircuitHalfOpenLimit = 1
 	}
 	client := &http.Client{Timeout: backendCfg.HTTPTimeout}
+	// Optional backend credentials (set them so the datastores REQUIRE the runtime's secret;
+	// the network firewalling that completes "non-bypassable" is a deploy-time concern).
+	qdrantAPIKey := strings.TrimSpace(os.Getenv("QDRANT_API_KEY"))
+	elasticAPIKey := strings.TrimSpace(os.Getenv("ELASTICSEARCH_API_KEY"))
 	return Backend{
 		Vector: QdrantVectorSearcher{
-			Endpoint: qdrantURL, Collection: qdrantCollection, Client: client,
+			Endpoint: qdrantURL, Collection: qdrantCollection, Client: client, APIKey: qdrantAPIKey,
 			EmbeddingURL: embeddingURL, EmbeddingTimeout: backendCfg.EmbeddingTimeout,
 			Breaker: NewCircuitBreaker(CircuitBreakerSettings{
 				Name: "qdrant", FailureLimit: backendCfg.CircuitFailureLimit,
@@ -106,7 +111,7 @@ func NewHTTPBackend(qdrantURL string, qdrantCollection string, elasticURL string
 			}),
 		},
 		Lexical: ElasticsearchLexicalSearcher{
-			Endpoint: elasticURL, Index: elasticIndex, Client: client,
+			Endpoint: elasticURL, Index: elasticIndex, Client: client, APIKey: elasticAPIKey,
 			Breaker: NewCircuitBreaker(CircuitBreakerSettings{
 				Name: "elasticsearch", FailureLimit: backendCfg.CircuitFailureLimit,
 				OpenTimeout: backendCfg.CircuitOpenTimeout, HalfOpenLimit: backendCfg.CircuitHalfOpenLimit,
@@ -241,6 +246,10 @@ type QdrantVectorSearcher struct {
 	EmbeddingTimeout time.Duration
 	Breaker          *CircuitBreaker
 	EmbeddingBreaker *CircuitBreaker
+	// APIKey, when set, is sent as Qdrant's "api-key" header. With Qdrant configured to
+	// require it, only the runtime (which holds the key) can reach the vector store —
+	// the network half of "non-bypassable" (firewalling Qdrant) is handled at deploy time.
+	APIKey string
 }
 
 func (q QdrantVectorSearcher) SearchVector(ctx context.Context, req QueryRequest, limit int) ([]Candidate, error) {
@@ -275,6 +284,9 @@ func (q QdrantVectorSearcher) SearchVector(ctx context.Context, req QueryRequest
 			return err
 		}
 		attemptReq.Header.Set("Content-Type", "application/json")
+		if q.APIKey != "" {
+			attemptReq.Header.Set("api-key", q.APIKey)
+		}
 		resp, err := q.client().Do(attemptReq)
 		if err != nil {
 			return err
@@ -309,6 +321,9 @@ type ElasticsearchLexicalSearcher struct {
 	Index    string
 	Client   *http.Client
 	Breaker  *CircuitBreaker
+	// APIKey, when set, is sent as "Authorization: ApiKey <key>" so a locked-down
+	// Elasticsearch only answers to the runtime.
+	APIKey string
 }
 
 func NewServiceCircuitBreaker(name string, failureLimit int, openTimeout time.Duration) *CircuitBreaker {
@@ -344,6 +359,9 @@ func (e ElasticsearchLexicalSearcher) SearchLexical(ctx context.Context, req Que
 			return err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		if e.APIKey != "" {
+			httpReq.Header.Set("Authorization", "ApiKey "+e.APIKey)
+		}
 		resp, err := e.client().Do(httpReq)
 		if err != nil {
 			return err

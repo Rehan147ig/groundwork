@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,10 @@ type OpenFGAChecker struct {
 	Endpoint  string
 	StoreName string
 	Client    *http.Client
+	// AuthToken, when set, is sent as "Authorization: Bearer <token>" — OpenFGA's pre-shared
+	// key auth. With OpenFGA configured to require it, only the runtime can query the
+	// authorization store; the network firewalling is completed at deploy time.
+	AuthToken string
 
 	mu      sync.Mutex
 	storeID string
@@ -35,6 +40,7 @@ func NewOpenFGAChecker(endpoint string, storeName string, timeout time.Duration)
 		Endpoint:  strings.TrimRight(endpoint, "/"),
 		StoreName: storeName,
 		Client:    &http.Client{Timeout: timeout},
+		AuthToken: strings.TrimSpace(os.Getenv("OPENFGA_API_TOKEN")),
 		breaker: NewCircuitBreaker(CircuitBreakerSettings{
 			Name: "openfga", FailureLimit: 3, OpenTimeout: 10 * time.Second, HalfOpenLimit: 1,
 		}),
@@ -160,6 +166,9 @@ func (o *OpenFGAChecker) getJSON(ctx context.Context, path string, out any) erro
 	if err != nil {
 		return err
 	}
+	if o.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+o.AuthToken)
+	}
 	resp, err := o.Client.Do(req)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -185,6 +194,9 @@ func (o *OpenFGAChecker) postJSON(ctx context.Context, path string, body any, ou
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if o.AuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+o.AuthToken)
+	}
 	resp, err := o.Client.Do(req)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {

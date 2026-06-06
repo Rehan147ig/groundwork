@@ -84,6 +84,20 @@ func (o *OpenFGAChecker) CanAccess(ctx context.Context, req QueryRequest, chunk 
 	return parsed.Allowed, nil
 }
 
+// ensure provisions the OpenFGA store and authorization model lazily on first use.
+//
+// If the store does not exist, it creates one, writes the current model, and seeds
+// the default group memberships.
+//
+// If the store already exists (e.g. provisioned by a previous binary), it reconciles
+// the model: when the latest stored model is missing a type the current binary
+// expects (today: "folder"), it writes the current model as a new version. OpenFGA's
+// /check uses the latest model when none is pinned, so the new model takes effect
+// immediately for subsequent queries without restarting the runtime.
+//
+// This closes the "authorization model drift" gap that previously left an old
+// 3-type model in place after a binary update — which made every folder-grant
+// permission check fail closed.
 func (o *OpenFGAChecker) ensure(ctx context.Context) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -96,12 +110,26 @@ func (o *OpenFGAChecker) ensure(ctx context.Context) error {
 		return err
 	}
 	o.storeID = storeID
+
 	if created {
 		if err := o.writeAuthorizationModel(ctx); err != nil {
 			return err
 		}
 		if err := o.seedDefaultMemberships(ctx); err != nil {
 			return err
+		}
+	} else {
+		// Drift detection: the store survived from a previous run but its model
+		// may pre-date the current binary's expected types. Write the current
+		// model as a new version if a required type is missing.
+		hasFolder, err := o.latestModelHasType(ctx, "folder")
+		if err != nil {
+			return err
+		}
+		if !hasFolder {
+			if err := o.writeAuthorizationModel(ctx); err != nil {
+				return err
+			}
 		}
 	}
 	o.ready = true
@@ -138,6 +166,36 @@ func (o *OpenFGAChecker) ensureStore(ctx context.Context) (string, bool, error) 
 
 func (o *OpenFGAChecker) writeAuthorizationModel(ctx context.Context) error {
 	return o.postJSON(ctx, "/stores/"+o.storeID+"/authorization-models", openFGAModel(), nil)
+}
+
+// latestModelHasType returns true when the most recent authorization model in the
+// current store contains a type definition for the named type. Used by ensure() to
+// detect model drift after a binary update (e.g. an older binary wrote a 3-type
+// model and a newer binary expects 4 types including "folder").
+//
+// OpenFGA's /authorization-models endpoint returns models newest-first. We fetch
+// only the first page (page_size=1) — that's the latest model and the one /check
+// will use when no model id is pinned.
+func (o *OpenFGAChecker) latestModelHasType(ctx context.Context, typeName string) (bool, error) {
+	var parsed struct {
+		AuthorizationModels []struct {
+			TypeDefinitions []struct {
+				Type string `json:"type"`
+			} `json:"type_definitions"`
+		} `json:"authorization_models"`
+	}
+	if err := o.getJSON(ctx, "/stores/"+o.storeID+"/authorization-models?page_size=1", &parsed); err != nil {
+		return false, err
+	}
+	if len(parsed.AuthorizationModels) == 0 {
+		return false, nil
+	}
+	for _, td := range parsed.AuthorizationModels[0].TypeDefinitions {
+		if td.Type == typeName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (o *OpenFGAChecker) seedDefaultMemberships(ctx context.Context) error {

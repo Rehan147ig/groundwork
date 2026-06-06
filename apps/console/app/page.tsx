@@ -31,6 +31,7 @@ export default function ConsoleHome() {
             <div className="eyebrow">AI Runtime Control Platform</div>
             <h1>CISO security telemetry</h1>
             <p className="muted">Live ACL interception, fail-closed retrieval, region isolation, and immutable query evidence for enterprise AI.</p>
+            <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Note: the summary figures below are illustrative sample values, not live telemetry. Live metrics arrive with the audit read API (dashboard Layer 2). The Demo Console runs real queries against the runtime.</p>
           </div>
           <Link className="button" href="/demo">Open Demo Console</Link>
         </div>

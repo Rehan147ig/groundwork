@@ -57,9 +57,13 @@ curl -s localhost:8080/v1/query -H "X-Groundwork-API-Key: gw_local_acme_key" \
   -H "Content-Type: application/json" -d '{"question":"warm up"}' >/dev/null
 
 # seed the synthetic bank corpus + persona graph
-go run ./examples/bank-demo/seed -qdrant=http://localhost:6333 -openfga=http://localhost:8081 \
-  -openfga-store=groundwork_local -tenant=demo_bank
+# (the seeder embeds each chunk via the ingestion service on :8090 — make sure the
+#  `ingestion` container is up/healthy first: docker compose ... ps)
+go run ./examples/bank-demo/seed -qdrant=http://localhost:6333 -openfga=http://localhost:8081
 ```
+The seeder's other inputs use defaults: `-corpus=./examples/bank-demo/corpus`,
+`-personas=./examples/bank-demo/personas/personas.json`, `-embedding=http://localhost:8090`
+(tenant/region come from `personas.json`; the store name is fixed to `groundwork_local`).
 
 ### 5. Make the runtime public + verify
 - In the **Ports** tab, set port **8080** visibility to **Public** to get your shareable URL.

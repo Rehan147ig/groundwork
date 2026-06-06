@@ -7,8 +7,10 @@
 //
 //  1. Read examples/bank-demo/personas/personas.json (personas, groups, folders, docs).
 //  2. Walk examples/bank-demo/corpus/*.md, parse YAML frontmatter, chunk the body.
-//  3. Push chunks into Qdrant with deterministic per-chunk vectors and the payload the
-//     runtime expects (document_id, chunk_id, chunk_hash, tenant_id, region, ...).
+//  3. Embed each chunk via the SAME /embed service the runtime uses for queries (so doc
+//     and query vectors share one space and nearest-neighbor search is meaningful), then
+//     push chunks into Qdrant with the payload the runtime expects (document_id, chunk_id,
+//     chunk_hash, tenant_id, region, ...).
 //  4. Look up the OpenFGA store that the runtime provisioned ("groundwork_local") and
 //     write the tuples that express groups, folder grants, document parents, and direct
 //     viewer grants exactly as a production ACL-sync connector would.
@@ -34,7 +36,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -80,6 +81,7 @@ func main() {
 	openfgaURL := flag.String("openfga", "http://localhost:8081", "OpenFGA base URL")
 	corpusDir := flag.String("corpus", "./examples/bank-demo/corpus", "corpus root directory")
 	personasFile := flag.String("personas", "./examples/bank-demo/personas/personas.json", "personas.json path")
+	embeddingURL := flag.String("embedding", "http://localhost:8090", "embedding service base URL (the SAME one the runtime uses; the dev compose maps ingestion to host port 8090)")
 	flag.Parse()
 
 	graph, err := readPersonaGraph(*personasFile)
@@ -111,9 +113,13 @@ func main() {
 		for ci, chunk := range chunks {
 			hash := sha256hex(chunk)
 			chunkID := "chk_" + hash[:20]
+			vec, err := embed(httpc, *embeddingURL, chunk)
+			if err != nil {
+				log.Fatalf("embed chunk of %s: %v (is the embedding service up at %s?)", doc.ID, err, *embeddingURL)
+			}
 			points = append(points, map[string]any{
 				"id":     pointID,
-				"vector": deterministicVector(chunk, vectorDim),
+				"vector": vec,
 				"payload": map[string]any{
 					"document_id":     doc.ID,
 					"chunk_id":        chunkID,
@@ -273,21 +279,39 @@ func upsertPoints(httpc *http.Client, base string, points []map[string]any) erro
 	return doJSON(httpc, http.MethodPut, url, map[string]any{"points": points}, nil)
 }
 
-// deterministicVector returns a reproducible vectorDim-element vector from the input text,
-// so re-seeding produces the same points and re-tests are stable. Values are not
-// semantically meaningful; the engine combines vector score with lexical scoring on
-// chunk text, and the lexical match is what makes the demo queries land on the right docs.
-func deterministicVector(text string, dim int) []float32 {
-	sum := sha256.Sum256([]byte(text))
-	// Seed a deterministic PRNG from the first 16 bytes of the hash.
-	var seed [32]byte
-	copy(seed[:], sum[:])
-	rng := rand.New(rand.NewChaCha8(seed))
-	v := make([]float32, dim)
-	for i := range v {
-		v[i] = float32(rng.NormFloat64() * 0.1)
+// embed calls the SAME /embed endpoint the runtime uses to embed queries
+// (POST {"text": ...} -> {"embedding": [...]}), so document vectors and query vectors live
+// in the same embedding space and Qdrant nearest-neighbor search is meaningful. This is
+// load-bearing for the demo: the live engine is vector-only, so random/placeholder doc
+// vectors would make every query land on arbitrary documents and the keystone moments
+// (e.g. "executive compensation framework" -> the exec-comp memo) would not work.
+func embed(httpc *http.Client, embeddingURL, text string) ([]float32, error) {
+	payload, _ := json.Marshal(map[string]string{"text": text})
+	url := strings.TrimRight(embeddingURL, "/") + "/embed"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
 	}
-	return v
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("embed %s -> %s: %s", url, resp.Status, strings.TrimSpace(string(data)))
+	}
+	var parsed struct {
+		Embedding []float32 `json:"embedding"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+	if len(parsed.Embedding) == 0 {
+		return nil, fmt.Errorf("empty embedding response")
+	}
+	return parsed.Embedding, nil
 }
 
 // ---------- OpenFGA ----------

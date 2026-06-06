@@ -1,0 +1,47 @@
+# Groundwork — GitHub Codespaces override.
+#
+# Layer this ON TOP of the dev compose (which exposes backend ports for seeding and uses
+# the real all-MiniLM embedder, so retrieval relevance is correct):
+#
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.codespace.yml up --build -d
+#
+# What this override changes vs the dev profile:
+#   1. OpenFGA → Supabase Postgres datastore (durable; survives restarts) + a one-shot
+#      `migrate` that creates OpenFGA's tables in Supabase before OpenFGA starts.
+#   2. Higher ACL/OpenFGA timeouts, because your Supabase project is in ap-southeast-1 and
+#      the Codespace runs in its own region — each OpenFGA check is a cross-region round trip.
+#
+#   IMPORTANT: because the DB is remote, latency numbers from this setup are NOT
+#   Groundwork's real performance. Use it to prove CORRECTNESS (allow/deny, fail-closed,
+#   audit). For real p95 numbers, co-locate the runtime and the database.
+#
+# Required env (set as a Codespaces secret or in your shell before `up`):
+#   OPENFGA_DATASTORE_URI   Supabase SESSION-pooler URI (port 5432) with ?sslmode=require
+#
+# The audit log (DATABASE_URL) intentionally stays on the in-container Postgres here, to
+# keep audit writes fast/local. To put the audit log on Supabase too, also override
+# query-runtime's DATABASE_URL to your Supabase URI.
+
+services:
+  openfga-migrate:
+    image: openfga/openfga:latest
+    command: ["migrate"]
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: ${OPENFGA_DATASTORE_URI:?set OPENFGA_DATASTORE_URI to your Supabase session-pooler URI with sslmode=require}
+    restart: "no"
+
+  openfga:
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: ${OPENFGA_DATASTORE_URI:?set OPENFGA_DATASTORE_URI}
+      OPENFGA_LOG_FORMAT: json
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+
+  query-runtime:
+    environment:
+      # Dev default is 500ms; bumped to tolerate cross-region Supabase round trips.
+      ACL_TIMEOUT_MS: "3000"
+      OPENFGA_TIMEOUT_MS: "3000"

@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
+import { Sidebar } from "../Sidebar";
 import { QueryResponse } from "@/lib/contracts";
 
 const scopes = [
@@ -76,17 +76,7 @@ export default function LiveAclTestPage() {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">Groundwork</div>
-        <nav className="nav">
-          <Link href="/">Security Overview</Link>
-          <Link href="/live-acl-test">Live ACL Test</Link>
-          <Link href="/tenants">Tenants</Link>
-          <Link href="/connectors">Connectors</Link>
-          <Link href="/traces">Query Traces</Link>
-          <Link href="/policies">Policies</Link>
-        </nav>
-      </aside>
+      <Sidebar />
       <main className="main">
         <div className="page-head">
           <div>

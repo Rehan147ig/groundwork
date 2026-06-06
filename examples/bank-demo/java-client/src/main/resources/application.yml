@@ -1,0 +1,28 @@
+server:
+  port: 9090
+
+spring:
+  application:
+    name: bank-demo-client
+  jackson:
+    serialization:
+      indent-output: true
+
+# Groundwork connection. All values overridable via environment variables:
+#   GROUNDWORK_RUNTIME_URL
+#   GROUNDWORK_API_KEY
+#   GROUNDWORK_JWT_HS_SECRET
+#   BANK_DEMO_PERSONAS_FILE
+groundwork:
+  runtime-url: ${GROUNDWORK_RUNTIME_URL:http://localhost:8080}
+  api-key: ${GROUNDWORK_API_KEY:gw_local_demo_bank_key}
+  jwt-secret: ${GROUNDWORK_JWT_HS_SECRET:demo-only-replace-in-production}
+
+bank-demo:
+  personas-file: ${BANK_DEMO_PERSONAS_FILE:./personas/personas.json}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

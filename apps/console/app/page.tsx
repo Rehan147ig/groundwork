@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Activity, DatabaseZap, LockKeyhole, ShieldCheck } from "lucide-react";
+import { Sidebar } from "./Sidebar";
 
 const metrics = [
   ["p95 latency", "184ms", "Under 250ms runtime budget", "good"],
@@ -23,17 +24,7 @@ const traces = [
 export default function ConsoleHome() {
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">Groundwork</div>
-        <nav className="nav">
-          <Link href="/">Security Overview</Link>
-          <Link href="/live-acl-test">Live ACL Test</Link>
-          <Link href="/tenants">Tenants</Link>
-          <Link href="/connectors">Connectors</Link>
-          <Link href="/traces">Query Traces</Link>
-          <Link href="/policies">Policies</Link>
-        </nav>
-      </aside>
+      <Sidebar />
       <main className="main">
         <div className="page-head">
           <div>
@@ -41,7 +32,7 @@ export default function ConsoleHome() {
             <h1>CISO security telemetry</h1>
             <p className="muted">Live ACL interception, fail-closed retrieval, region isolation, and immutable query evidence for enterprise AI.</p>
           </div>
-          <Link className="button" href="/live-acl-test">Run ACL test</Link>
+          <Link className="button" href="/demo">Open Demo Console</Link>
         </div>
 
         <section className="grid metrics">

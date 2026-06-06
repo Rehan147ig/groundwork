@@ -1,0 +1,158 @@
+{
+  "$schema": "./personas.schema.json",
+  "comment": "Bank-demo persona and permission graph. The seeder reads this file and writes the corresponding OpenFGA tuples + Qdrant document payloads. Identical in shape to what an ACL-sync connector (Microsoft Graph, Okta, Temenos sidecar) would produce in production — so the demo wire exactly matches the real-world path.",
+
+  "tenant_id": "demo_bank",
+  "region": "uk",
+
+  "personas": [
+    {
+      "id": "teller_jane",
+      "display_name": "Jane T. — Junior Teller",
+      "role": "Junior Teller, London branch",
+      "groups": ["tellers", "branch_lon", "all_staff"]
+    },
+    {
+      "id": "rm_tony",
+      "display_name": "Tony R. — Senior Relationship Manager",
+      "role": "Senior RM, Corporate Banking, London 01",
+      "groups": ["rms", "rms_lon", "branch_lon", "credit_group", "all_staff"]
+    },
+    {
+      "id": "rm_natasha",
+      "display_name": "Natasha R. — Relationship Manager",
+      "role": "RM, Corporate Banking, New York 01",
+      "groups": ["rms", "rms_nyc", "branch_nyc", "credit_group", "all_staff"]
+    },
+    {
+      "id": "compliance_mhill",
+      "display_name": "M. Hill — Compliance Officer (MLRO)",
+      "role": "Money Laundering Reporting Officer",
+      "groups": ["compliance", "credit_group", "all_staff"]
+    },
+    {
+      "id": "branch_mgr_pepper",
+      "display_name": "Pepper P. — Head of Corporate Banking / Branch Manager LON",
+      "role": "Branch Manager London + Head of Corporate Banking",
+      "groups": ["branch_managers_lon", "branch_managers", "branch_lon", "credit_group", "rms_lon", "all_staff"]
+    },
+    {
+      "id": "auditor_logan",
+      "display_name": "Logan — Chief Audit Executive",
+      "role": "Chief Audit Executive (Internal Audit)",
+      "groups": ["auditors", "all_staff"]
+    },
+    {
+      "id": "exec_starkceo",
+      "display_name": "Group CEO",
+      "role": "Group Chief Executive Officer",
+      "groups": ["executives", "all_staff"]
+    }
+  ],
+
+  "groups": [
+    {"id": "all_staff", "comment": "Everyone employed by the bank."},
+    {"id": "tellers", "comment": "Front-of-house teller staff."},
+    {"id": "rms", "comment": "All Relationship Managers."},
+    {"id": "rms_lon", "comment": "London RMs."},
+    {"id": "rms_nyc", "comment": "NYC RMs."},
+    {"id": "branch_lon", "comment": "All London branch staff."},
+    {"id": "branch_nyc", "comment": "All NYC branch staff."},
+    {"id": "branch_managers", "comment": "All branch managers globally."},
+    {"id": "branch_managers_lon", "comment": "London branch managers."},
+    {"id": "branch_managers_nyc", "comment": "NYC branch managers."},
+    {"id": "compliance", "comment": "Compliance officers."},
+    {"id": "credit_group", "comment": "Credit officers + RMs + branch managers."},
+    {"id": "auditors", "comment": "Internal Audit team."},
+    {"id": "executives", "comment": "Executive Committee + Board distribution."}
+  ],
+
+  "folders": [
+    {
+      "id": "tier_public",
+      "comment": "All-staff readable. Standard internal policies.",
+      "viewers": ["group:all_staff#member"]
+    },
+    {
+      "id": "tier_compliance",
+      "comment": "Compliance team and above.",
+      "viewers": ["group:compliance#member"]
+    },
+    {
+      "id": "tier_credit",
+      "comment": "Credit Group readable. RMs, branch managers, compliance.",
+      "viewers": ["group:credit_group#member"]
+    },
+    {
+      "id": "tier_kyc",
+      "comment": "KYC packets - compliance + assigned RMs (RM access granted per-document).",
+      "viewers": ["group:compliance#member"]
+    },
+    {
+      "id": "tier_branch_mgmt_lon",
+      "comment": "London branch managers + compliance.",
+      "viewers": ["group:branch_managers_lon#member", "group:compliance#member"]
+    },
+    {
+      "id": "tier_branch_mgmt_nyc",
+      "comment": "NYC branch managers + compliance.",
+      "viewers": ["group:branch_managers_nyc#member", "group:compliance#member"]
+    },
+    {
+      "id": "tier_audit",
+      "comment": "Internal Audit only.",
+      "viewers": ["group:auditors#member"]
+    },
+    {
+      "id": "tier_executive",
+      "comment": "Executive Committee + Board only.",
+      "viewers": ["group:executives#member"]
+    },
+    {
+      "id": "tier_audit_committee_only",
+      "comment": "Audit Committee only - no group inheritance; access via direct grant.",
+      "viewers": []
+    }
+  ],
+
+  "documents": [
+    {"id": "POL-001",                 "file": "policy-memos/POL-001-credit-policy.md",            "folder": "tier_public",            "extra_viewers": []},
+    {"id": "POL-PRIV-2026",           "file": "policy-memos/POL-PRIV-2026.md",                    "folder": "tier_public",            "extra_viewers": []},
+    {"id": "POL-AML-2026",            "file": "policy-memos/POL-AML-2026.md",                     "folder": "tier_compliance",        "extra_viewers": ["group:rms#member", "group:auditors#member"]},
+    {"id": "POL-EXEC-COMP-2026",      "file": "policy-memos/POL-EXEC-COMP-2026.md",               "folder": "tier_executive",         "extra_viewers": []},
+
+    {"id": "CM-2026-001",             "file": "credit-memos/CM-2026-001-acme-manufacturing.md",   "folder": "tier_credit",            "extra_viewers": ["group:auditors#member"]},
+    {"id": "CM-2026-002",             "file": "credit-memos/CM-2026-002-stark-industries.md",     "folder": "tier_executive",         "extra_viewers": ["user:rm_tony", "user:branch_mgr_pepper", "group:auditors#member"]},
+    {"id": "CM-2026-003",             "file": "credit-memos/CM-2026-003-globaltech.md",           "folder": "tier_credit",            "extra_viewers": ["group:auditors#member"]},
+    {"id": "CM-2026-004",             "file": "credit-memos/CM-2026-004-wayne-enterprises.md",    "folder": "tier_executive",         "extra_viewers": ["user:branch_mgr_pepper", "group:auditors#member"]},
+    {"id": "CM-2026-005",             "file": "credit-memos/CM-2026-005-hammer-declined.md",      "folder": "tier_credit",            "extra_viewers": ["group:compliance#member", "group:auditors#member"]},
+
+    {"id": "KYC-CUST-100100",         "file": "kyc-packets/KYC-CUST-100100-stark.md",             "folder": "tier_kyc",               "extra_viewers": ["user:rm_tony"]},
+    {"id": "KYC-CUST-100200",         "file": "kyc-packets/KYC-CUST-100200-wayne.md",             "folder": "tier_kyc",               "extra_viewers": ["user:rm_natasha"]},
+    {"id": "KYC-CUST-200300",         "file": "kyc-packets/KYC-CUST-200300-hammer.md",            "folder": "tier_kyc",               "extra_viewers": ["user:rm_natasha", "group:executives#member", "group:auditors#member"]},
+    {"id": "KYC-CUST-300100",         "file": "kyc-packets/KYC-CUST-300100-potts.md",             "folder": "tier_kyc",               "extra_viewers": ["user:rm_tony"]},
+
+    {"id": "LR-2026-Q1-PORTFOLIO",    "file": "loan-reviews/LR-2026-Q1-portfolio.md",             "folder": "tier_credit",            "extra_viewers": ["group:auditors#member"]},
+    {"id": "LR-2026-WAIVER-STARK",    "file": "loan-reviews/LR-2026-WAIVER-STARK.md",             "folder": "tier_credit",            "extra_viewers": ["group:auditors#member"]},
+
+    {"id": "AUDIT-2026-Q1-001",       "file": "audit-findings/AUDIT-2026-Q1-001.md",              "folder": "tier_audit",             "extra_viewers": ["group:executives#member"]},
+    {"id": "AUDIT-2026-INTERNAL-ACCESS","file": "audit-findings/AUDIT-2026-INTERNAL-ACCESS.md",   "folder": "tier_audit",             "extra_viewers": ["group:executives#member"]},
+    {"id": "AUDIT-2026-WHISTLEBLOWER","file": "audit-findings/AUDIT-2026-WHISTLEBLOWER.md",       "folder": "tier_audit_committee_only","extra_viewers": ["user:auditor_logan"]},
+
+    {"id": "CC-STARK-001",            "file": "customer-correspondence/CC-STARK-001-complaint.md","folder": "tier_branch_mgmt_lon",   "extra_viewers": ["user:rm_tony", "group:auditors#member"]},
+    {"id": "CC-WAYNE-001",            "file": "customer-correspondence/CC-WAYNE-001-private-banking.md","folder": "tier_branch_mgmt_nyc","extra_viewers": ["user:rm_natasha", "group:auditors#member"]},
+    {"id": "CC-EXEC-001",             "file": "customer-correspondence/CC-EXEC-001-board-confidential.md","folder": "tier_executive","extra_viewers": ["user:auditor_logan"]}
+  ],
+
+  "expected_demo_outcomes": [
+    {"persona": "teller_jane",       "query": "what is our credit policy",          "should_see": ["POL-001"], "should_not_see": ["POL-EXEC-COMP-2026", "CM-2026-002"]},
+    {"persona": "teller_jane",       "query": "executive compensation framework",   "should_see": [], "should_not_see": ["POL-EXEC-COMP-2026"]},
+    {"persona": "rm_tony",           "query": "Stark Industries credit memo",       "should_see": ["CM-2026-002"], "should_not_see": ["CM-2026-004"]},
+    {"persona": "rm_natasha",        "query": "Stark Industries credit memo",       "should_see": [], "should_not_see": ["CM-2026-002"], "note": "Different RM and branch"},
+    {"persona": "compliance_mhill",  "query": "Hammer Industries adverse media",    "should_see": ["KYC-CUST-200300", "CM-2026-005"], "should_not_see": ["POL-EXEC-COMP-2026"]},
+    {"persona": "auditor_logan",     "query": "loan approval workflow weakness",    "should_see": ["AUDIT-2026-Q1-001"], "should_not_see": []},
+    {"persona": "auditor_logan",     "query": "whistleblower follow-up",            "should_see": ["AUDIT-2026-WHISTLEBLOWER"], "should_not_see": []},
+    {"persona": "exec_starkceo",     "query": "executive compensation framework",   "should_see": ["POL-EXEC-COMP-2026"], "should_not_see": []},
+    {"persona": "exec_starkceo",     "query": "whistleblower",                      "should_see": [], "should_not_see": ["AUDIT-2026-WHISTLEBLOWER"], "note": "Audit committee only"}
+  ]
+}

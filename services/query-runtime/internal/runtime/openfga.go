@@ -121,13 +121,21 @@ func (o *OpenFGAChecker) ensure(ctx context.Context) error {
 	} else {
 		// Drift detection: the store survived from a previous run but its model
 		// may pre-date the current binary's expected types. Write the current
-		// model as a new version if a required type is missing.
+		// model as a new version if a required type is missing, and also seed
+		// the default memberships — they're idempotent and the ingestion service
+		// no longer guarantees they're written (it used to as part of its own
+		// bootstrap, which has been removed to make this runtime the sole model
+		// owner). Skipping the seed here would leave the default tuples missing
+		// when ingestion creates the store first.
 		hasFolder, err := o.latestModelHasType(ctx, "folder")
 		if err != nil {
 			return err
 		}
 		if !hasFolder {
 			if err := o.writeAuthorizationModel(ctx); err != nil {
+				return err
+			}
+			if err := o.seedDefaultMemberships(ctx); err != nil {
 				return err
 			}
 		}

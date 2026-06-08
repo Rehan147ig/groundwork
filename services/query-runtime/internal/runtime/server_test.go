@@ -26,6 +26,17 @@ func (m *mockExecutor) Execute(ctx context.Context, req QueryRequest) QueryRespo
 	}
 }
 
+// capturingExecutor records the QueryRequest it was called with so tests can
+// assert what server.query plumbed in (tenant, region, agent key id/name, etc.).
+type capturingExecutor struct {
+	last QueryRequest
+}
+
+func (c *capturingExecutor) Execute(ctx context.Context, req QueryRequest) QueryResponse {
+	c.last = req
+	return QueryResponse{Answer: "ok", Trace: RuntimeTrace{TenantID: req.TenantID, UserID: req.UserID}}
+}
+
 func newTestServer(cfg Config) *Server {
 	backend := NewMemoryBackend()
 	apiKeys := NewMemoryAPIKeyResolver("gw_test_key", TenantContext{TenantID: "tenant_demo", Region: "uk", KeyName: "test"})
@@ -366,5 +377,40 @@ func TestQueryDemoModeAllowsBodyUserID(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"user_id":"demo_user"`) {
 		t.Fatalf("demo mode should use the body user_id, got %s", rec.Body.String())
+	}
+}
+
+// TestQueryStampsAgentKeyFromAPIKey verifies that the PR #21 agent
+// attribution plumbing works: both the stable KeyID and the display
+// KeyName are set on QueryRequest BEFORE the executor sees it, and
+// neither can be set from the request body. Both land on the audit row
+// downstream (engine.auditEntryFromTrace copies them onto
+// AuditEntry.AgentKeyID / AgentKeyName).
+func TestQueryStampsAgentKeyFromAPIKey(t *testing.T) {
+	backend := NewMemoryBackend()
+	apiKeys := NewMemoryAPIKeyResolver("gw_test_key", TenantContext{
+		TenantID: "tenant_demo", Region: "uk", KeyName: "treasury-agent",
+	})
+	captor := &capturingExecutor{}
+	server := NewServerWithExecutor(Config{}, backend, apiKeys, captor)
+	server.allowDemoIdentity = true
+
+	// Attempt to inject forged agent attribution via the request body —
+	// both fields are json:"-" and must be ignored.
+	body := `{"user_id":"user_1","question":"test","AgentKeyID":9999,"AgentKeyName":"forged"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	rec := httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// MemoryAPIKeyResolver assigns KeyID = 1 to the bootstrap key.
+	if captor.last.AgentKeyID != 1 {
+		t.Fatalf("AgentKeyID must come from TenantContext.KeyID (stable api_keys.id), got %d", captor.last.AgentKeyID)
+	}
+	if captor.last.AgentKeyName != "treasury-agent" {
+		t.Fatalf("AgentKeyName must come from TenantContext.KeyName, got %q", captor.last.AgentKeyName)
 	}
 }

@@ -114,6 +114,13 @@ func (s *Server) query(w http.ResponseWriter, r *http.Request) {
 	}
 	req.TenantID = tenant.TenantID
 	req.Region = tenant.Region
+	// PR #21: stamp the verified API key identity onto the request
+	// so the audit row carries both the stable FK (KeyID) and the
+	// display snapshot (KeyName). Sourced from the TenantContext,
+	// never from the body — QueryRequest's json:"-" tags enforce
+	// that even if the fields are in the JSON body.
+	req.AgentKeyID = tenant.KeyID
+	req.AgentKeyName = tenant.KeyName
 
 	// Effective end-user identity: a verified assertion always wins and the
 	// body-supplied user_id is ignored. The body user_id is honored only in demo

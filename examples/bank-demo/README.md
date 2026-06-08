@@ -82,8 +82,12 @@ go run . \
   -qdrant=http://localhost:6333 \
   -openfga=http://localhost:8081 \
   -corpus=../corpus \
-  -personas=../personas/personas.json
-# Expect: ~18 documents, ~60-80 chunks, ~120 OpenFGA tuples written.
+  -personas=../personas/personas.json \
+  -postgres="postgres://groundwork:groundwork@localhost:5432/groundwork?sslmode=disable"
+# Expect: ~18 documents, ~60-80 chunks, ~120 OpenFGA tuples written,
+# and ~18 demo.documents rows + per-doc grants for the Leak Report.
+# (-postgres can be omitted on a Qdrant+OpenFGA-only smoke run; the
+#  Leak Report won't have document attribution to join against.)
 ```
 
 ```bash

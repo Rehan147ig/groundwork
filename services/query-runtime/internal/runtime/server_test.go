@@ -26,6 +26,17 @@ func (m *mockExecutor) Execute(ctx context.Context, req QueryRequest) QueryRespo
 	}
 }
 
+// capturingExecutor records the QueryRequest it was called with so tests can
+// assert what server.query plumbed in (tenant, region, agent_id, etc.).
+type capturingExecutor struct {
+	last QueryRequest
+}
+
+func (c *capturingExecutor) Execute(ctx context.Context, req QueryRequest) QueryResponse {
+	c.last = req
+	return QueryResponse{Answer: "ok", Trace: RuntimeTrace{TenantID: req.TenantID, UserID: req.UserID}}
+}
+
 func newTestServer(cfg Config) *Server {
 	backend := NewMemoryBackend()
 	apiKeys := NewMemoryAPIKeyResolver("gw_test_key", TenantContext{TenantID: "tenant_demo", Region: "uk", KeyName: "test"})
@@ -366,5 +377,35 @@ func TestQueryDemoModeAllowsBodyUserID(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"user_id":"demo_user"`) {
 		t.Fatalf("demo mode should use the body user_id, got %s", rec.Body.String())
+	}
+}
+
+// TestQueryStampsAgentIDFromAPIKey verifies that the PR #21 agent_id
+// plumbing works: the API key's name (TenantContext.KeyName) is set on
+// the QueryRequest BEFORE the executor sees it, and it cannot be set
+// from the request body. AgentID lands on the audit row downstream
+// (engine.auditEntryFromTrace copies it onto AuditEntry.AgentID).
+func TestQueryStampsAgentIDFromAPIKey(t *testing.T) {
+	backend := NewMemoryBackend()
+	apiKeys := NewMemoryAPIKeyResolver("gw_test_key", TenantContext{
+		TenantID: "tenant_demo", Region: "uk", KeyName: "treasury-agent",
+	})
+	captor := &capturingExecutor{}
+	server := NewServerWithExecutor(Config{}, backend, apiKeys, captor)
+	server.allowDemoIdentity = true
+
+	// Attempt to inject a forged agent_id via the request body — should
+	// be ignored because QueryRequest.AgentID has json:"-".
+	body := `{"user_id":"user_1","question":"test","AgentID":"forged"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	rec := httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if captor.last.AgentID != "treasury-agent" {
+		t.Fatalf("agent_id must come from TenantContext.KeyName, got %q", captor.last.AgentID)
 	}
 }

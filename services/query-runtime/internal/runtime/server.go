@@ -114,6 +114,11 @@ func (s *Server) query(w http.ResponseWriter, r *http.Request) {
 	}
 	req.TenantID = tenant.TenantID
 	req.Region = tenant.Region
+	// PR #21: stamp the API key name onto the request as the
+	// "agent_id" attribution for the audit row. Sourced from the
+	// verified TenantContext, never from the body — QueryRequest's
+	// json:"-" tag enforces that even if the field is in the JSON.
+	req.AgentID = tenant.KeyName
 
 	// Effective end-user identity: a verified assertion always wins and the
 	// body-supplied user_id is ignored. The body user_id is honored only in demo

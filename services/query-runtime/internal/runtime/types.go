@@ -30,6 +30,14 @@ type QueryRequest struct {
 	Question     string   `json:"question"`
 	SourceScopes []string `json:"source_scopes,omitempty"`
 	IDKThreshold float64  `json:"idk_threshold,omitempty"`
+
+	// AgentID is the human-readable name of the API key that
+	// authenticated the call (sourced from TenantContext.KeyName by
+	// server.query before dispatching to the executor). It is never
+	// accepted from the request body — the json:"-" tag enforces that —
+	// so a client cannot spoof who they are claiming to be. PR #21
+	// plumbs it onto the audit row for the Audit Read API + Dashboard.
+	AgentID string `json:"-"`
 }
 
 type CreateAPIKeyRequest struct {

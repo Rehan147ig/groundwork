@@ -492,11 +492,19 @@ func auditTestDB(t *testing.T) *sql.DB {
 
 func installAuditMigration(t *testing.T, db *sql.DB) {
 	t.Helper()
+	// audit_log_decisions FK-references audit_log so drop it first; then
+	// drop audit_log itself (CASCADE removes the no_update / no_delete rules).
+	_, _ = db.Exec(`DROP TABLE IF EXISTS audit_log_decisions CASCADE`)
 	_, _ = db.Exec(`DROP TABLE IF EXISTS audit_log CASCADE`)
 	for _, name := range []string{
 		"003_create_audit_log.up.sql",
 		"004_add_previous_hash.up.sql",
 		"005_add_audit_decision_columns.up.sql",
+		"007_add_audit_identity_columns.up.sql",
+		// PR #21: agent_id + access_decisions columns on audit_log, plus
+		// the audit_log_decisions table. PostgresAuditWriter.Write
+		// references these columns, so the rule-tests fail without it.
+		"011_extend_audit_log.up.sql",
 	} {
 		sqlText, err := os.ReadFile("../../../../migrations/" + name)
 		if err != nil {

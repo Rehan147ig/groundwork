@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"groundwork/query-runtime/internal/runtime"
 )
 
 type AuditEntry struct {
@@ -40,6 +43,27 @@ type AuditEntry struct {
 	PrincipalID        string
 	ImmutableDigest    string
 	PreviousHash       string
+
+	// AgentID is the human-readable name of the API key that made the call
+	// (TenantContext.KeyName, sourced from api_keys.name). PR #21 addition.
+	//
+	// Deliberately NOT in the digest payload (see ComputeDigest below) —
+	// pre-PR21 rows have agent_id NULL and must keep verifying under the
+	// old formula. The Audit Read API and Dashboard L2 are the consumers;
+	// if tamper-evidence on agent_id ever matters we'll bump the digest
+	// payload to v2 and gate verification by row version.
+	AgentID string
+
+	// AccessDecisions is the per-chunk authorization outcome captured in
+	// the trace. PR #21 addition. Stored two ways inside the same
+	// advisory-locked transaction so the two views cannot disagree:
+	//   - audit_log.access_decisions  (JSONB, denormalised single-row reads
+	//     for Replay)
+	//   - audit_log_decisions          (normalised one-row-per-chunk, for
+	//     the Leak Report's per-document fan-in)
+	//
+	// Like AgentID, deliberately NOT in the digest payload.
+	AccessDecisions []runtime.AccessDecision
 }
 
 func ComputeDigest(entry AuditEntry) string {
@@ -122,6 +146,15 @@ func (p *PostgresAuditWriter) Write(ctx context.Context, entry AuditEntry) error
 	}
 
 	entry.ImmutableDigest = ComputeDigest(entry)
+
+	// PR #21: access_decisions ships as a JSONB blob co-located on the
+	// audit_log row. Marshal under the lock so the blob and the normalised
+	// audit_log_decisions rows go in atomically. nil/empty slices marshal
+	// to "null" / "[]"; we coerce empty -> NULL via the writer below.
+	decisionsJSON, err := json.Marshal(entry.AccessDecisions)
+	if err != nil {
+		return fmt.Errorf("marshal access_decisions: %w", err)
+	}
 	if _, err := tx.ExecContext(writeCtx, `
 		INSERT INTO audit_log (
 			trace_id,
@@ -147,9 +180,11 @@ func (p *PostgresAuditWriter) Write(ctx context.Context, entry AuditEntry) error
 			identity_resolution,
 			principal_id,
 			immutable_digest,
-			previous_hash
+			previous_hash,
+			agent_id,
+			access_decisions
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 	`,
 		entry.TraceID,
 		entry.TenantID,
@@ -175,9 +210,55 @@ func (p *PostgresAuditWriter) Write(ctx context.Context, entry AuditEntry) error
 		entry.PrincipalID,
 		entry.ImmutableDigest,
 		nullString(entry.PreviousHash),
+		nullString(entry.AgentID),
+		nullJSONB(entry.AccessDecisions, decisionsJSON),
 	); err != nil {
 		return err
 	}
+
+	// Bulk-insert one row per AccessDecision. Single round trip even for
+	// hundreds of candidates. Ordinal preserves the order Engine.Execute
+	// evaluated the chunks — Replay relies on that. We send NULL for
+	// document_id when the trace didn't carry one (e.g. fail-closed paths
+	// that recorded a single synthetic deny decision with no chunk).
+	if len(entry.AccessDecisions) > 0 {
+		var sb strings.Builder
+		sb.WriteString(`
+			INSERT INTO audit_log_decisions (
+				trace_id, ordinal, chunk_id, document_id,
+				allowed, reason, required_scope, region, score
+			) VALUES `)
+		args := make([]any, 0, len(entry.AccessDecisions)*9)
+		for i, d := range entry.AccessDecisions {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			base := i * 9
+			fmt.Fprintf(&sb,
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				base+1, base+2, base+3, base+4, base+5,
+				base+6, base+7, base+8, base+9,
+			)
+			args = append(args,
+				entry.TraceID,
+				i,
+				d.ChunkID,
+				nullString(d.DocumentID),
+				d.Allowed,
+				nullString(d.Reason),
+				nullString(d.RequiredScope),
+				nullString(d.Region),
+				// Score is reserved for a future ranker integration that
+				// scores per-decision; for now the per-chunk decision
+				// doesn't carry a score and we store NULL.
+				sql.NullFloat64{},
+			)
+		}
+		if _, err := tx.ExecContext(writeCtx, sb.String(), args...); err != nil {
+			return fmt.Errorf("insert audit_log_decisions: %w", err)
+		}
+	}
+
 	return tx.Commit()
 }
 
@@ -298,4 +379,15 @@ func nullString(value string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: value, Valid: true}
+}
+
+// nullJSONB returns NULL when the input slice is empty (so audit rows with
+// no decisions store NULL rather than "null" or "[]" JSONB literals) and
+// the supplied JSON bytes otherwise. Returned as `any` so the caller can
+// pass it straight into ExecContext.
+func nullJSONB(decisions []runtime.AccessDecision, marshalled []byte) any {
+	if len(decisions) == 0 {
+		return nil
+	}
+	return marshalled
 }

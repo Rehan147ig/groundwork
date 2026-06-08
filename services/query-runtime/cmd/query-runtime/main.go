@@ -65,7 +65,7 @@ func main() {
 	// Postgres writer's own per-write deadline, so the configured timeout is actually honored
 	// (the writer no longer caps it at a hardcoded 30ms).
 	auditWrite := envDuration("AUDIT_TIMEOUT_MS", auditTimeoutDefault(cfg.DatabaseURL))
-	auditor, closeAudit, err := buildAuditWriter(cfg.DatabaseURL, backend, auditWrite)
+	auditor, auditDB, closeAudit, err := buildAuditWriter(cfg.DatabaseURL, backend, auditWrite)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -136,6 +136,14 @@ func main() {
 	server.SetIdentity(identityVerifier, allowDemoIdentity)
 	server.SetCanonicalIdentity(resolver, canonicalIdentity)
 	server.SetRateLimiter(rateLimiter)
+	// PR #22: wire the read-side Audit API. Off when there's no
+	// Postgres (local in-memory mode) — the /v1/audit* endpoints
+	// return 503 audit_unavailable in that case, which is the right
+	// behavior since the in-memory trace store doesn't hold the
+	// hash-chained ledger the read API exposes.
+	if auditDB != nil {
+		server.SetAuditReader(engine.NewPostgresAuditReader(auditDB))
+	}
 
 	mcpHTTP := mcp.NewHTTPServer(core, apiKeys, identityVerifier, allowDemoIdentity)
 	mcpHTTP.SetCanonicalIdentity(resolver, canonicalIdentity)
@@ -195,19 +203,22 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 
 // buildAuditWriter selects the audit sink: the immutable Postgres ledger when
 // DATABASE_URL is set, otherwise the in-memory trace store for local/dev.
-func buildAuditWriter(databaseURL string, backend runtime.Backend, timeout time.Duration) (engine.AuditWriter, func(), error) {
+// Also returns the underlying *sql.DB (or nil for the in-memory case) so the
+// caller can construct an audit READER from the same handle — PR #22 wires
+// engine.PostgresAuditReader for /v1/audit* against this DB.
+func buildAuditWriter(databaseURL string, backend runtime.Backend, timeout time.Duration) (engine.AuditWriter, *sql.DB, func(), error) {
 	if databaseURL == "" {
-		return engine.RuntimeTraceAuditWriter{Trace: backend.Trace}, func() {}, nil
+		return engine.RuntimeTraceAuditWriter{Trace: backend.Trace}, nil, func() {}, nil
 	}
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
-		return nil, func() {}, err
+		return nil, nil, func() {}, err
 	}
 	// Honor the configured AUDIT_TIMEOUT_MS for the per-write deadline. The bare
 	// NewPostgresAuditWriter hardcodes a 30ms budget that is too tight for a real Postgres
 	// round-trip (advisory lock + select + insert) and would fail audit writes — and thus
 	// fail queries closed — under load or on a cold connection.
-	return engine.NewPostgresAuditWriterWithTimeout(db, timeout), func() { _ = db.Close() }, nil
+	return engine.NewPostgresAuditWriterWithTimeout(db, timeout), db, func() { _ = db.Close() }, nil
 }
 
 // buildPrincipalResolver constructs the canonical principal resolver: the Postgres-backed

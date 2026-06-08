@@ -24,6 +24,12 @@ type Server struct {
 	resolver          PrincipalResolver
 	canonicalIdentity bool
 	limiter           *RateLimiter
+	// auditReader is the optional read-side implementation used by the
+	// PR #22 Audit Read API endpoints. Nil-safe: when unset, /v1/audit*
+	// returns 503 audit_unavailable. Wired via SetAuditReader from
+	// cmd/query-runtime — the engine package supplies a Postgres impl
+	// that internally reuses engine.LoadAuditChain / VerifyChain.
+	auditReader AuditReader
 }
 
 // SetRateLimiter wires the per-API-key request/minute limiter. When set, authenticated
@@ -78,6 +84,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/admin/api-keys", s.requireAPIKey("admin", s.createAPIKey))
 	mux.HandleFunc("POST /v1/admin/api-keys/{id}/rotate", s.requireAPIKey("admin", s.rotateAPIKey))
 	mux.HandleFunc("DELETE /v1/admin/api-keys/{id}", s.requireAPIKey("admin", s.revokeAPIKey))
+	// PR #22: Audit Read API. Read-only. Requires the new "audit" scope
+	// (admin scope inherits via hasScope's existing override). All four
+	// endpoints honor the tenant_id from the API-key context only —
+	// never from the URL or body. /audit/verify is intentionally
+	// unauthenticated WITH the audit scope; chain verification is a
+	// SOC-2 observable surface for tenants who hold an audit-only key.
+	mux.HandleFunc("GET /v1/audit", s.requireAPIKey(auditScope, s.auditList))
+	mux.HandleFunc("GET /v1/audit/stats", s.requireAPIKey(auditScope, s.auditStats))
+	mux.HandleFunc("GET /v1/audit/verify", s.requireAPIKey(auditScope, s.auditVerify))
+	mux.HandleFunc("GET /v1/audit/{trace_id}", s.requireAPIKey(auditScope, s.auditGet))
 	return mux
 }
 

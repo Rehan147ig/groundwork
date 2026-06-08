@@ -4,57 +4,81 @@
 -- Leak Report, Dashboard L2) needs:
 --
 --   1) per-query agent attribution on audit_log so the dashboard can group
---      "which agent ran this" and replay can re-run under the same caller
+--      "which API key ran this" and replay can re-run under the same caller
 --   2) per-chunk decision storage so the Leak Report can produce
 --      "denied attempts per document" without re-executing the query
 --
--- Both new audit_log columns are NON-CHAINED metadata: the digest payload in
+-- All new columns are NON-CHAINED metadata: the digest payload in
 -- engine.ComputeDigest is INTENTIONALLY unchanged, so VerifyChain over
--- pre-PR21 rows continues to match. Versioned tamper-evidence on agent_id
--- is a deliberate non-goal here; if that becomes a pilot requirement we'll
--- bump the digest payload to v2 and gate verification by row version.
+-- pre-PR21 rows continues to match. Versioned tamper-evidence on
+-- per-query / per-chunk attribution is a deliberate non-goal here; if
+-- that becomes a pilot requirement we'll bump the digest payload to v2
+-- and gate verification by row version.
 
--- agent_id is the human-readable name of the API key that made the call
--- (TenantContext.KeyName, sourced from api_keys.name). Nullable because
--- pre-PR21 rows have no attribution and writers running without an API key
--- context (e.g. fail_closed paths bypassing the verified-identity middleware)
--- legitimately have nothing to record.
-ALTER TABLE audit_log ADD COLUMN agent_id TEXT;
+-- ---------------------------------------------------------------------
+-- audit_log: agent attribution + per-query decision blob
+-- ---------------------------------------------------------------------
 
--- access_decisions is a JSONB blob of the per-chunk AccessDecision objects
--- captured in the trace. It mirrors the rows in audit_log_decisions but
--- stays denormalised for single-row reads (the Replay engine fetches one
--- trace at a time and walks decisions; that read shape doesn't want a JOIN).
+-- agent_key_id is the STABLE foreign key onto api_keys(id) — never
+-- changes once the key is created. The actual FK is not declared
+-- here because api_keys lives outside the migration system (created
+-- in runtime/auth.go bootstrap) and we don't want migration 011 to
+-- depend on its presence; the writer enforces the contract.
+ALTER TABLE audit_log ADD COLUMN agent_key_id BIGINT;
+
+-- agent_key_name is the DISPLAY snapshot of api_keys.name AT WRITE
+-- TIME. The name in api_keys can be mutated by operators (rename
+-- "treasury-agent" -> "treasury-agent-v2"); storing the snapshot
+-- here means historical audit rows keep showing the name as it was
+-- when the call landed, while the stable group-by key
+-- (agent_key_id) is what the Dashboard joins on.
+ALTER TABLE audit_log ADD COLUMN agent_key_name TEXT;
+
+-- access_decisions is a JSONB blob of the per-chunk AccessDecision
+-- objects captured in the trace. It mirrors the rows in
+-- audit_log_decisions but stays denormalised for single-row reads
+-- (Replay fetches one trace at a time and walks decisions; that
+-- read shape doesn't want a JOIN).
 ALTER TABLE audit_log ADD COLUMN access_decisions JSONB;
 
--- Dashboard L2 groups the tenant landing page by agent_id.
-CREATE INDEX idx_audit_log_agent_id
-    ON audit_log (tenant_id, agent_id)
-    WHERE agent_id IS NOT NULL;
+-- Dashboard L2 groups the tenant landing page by the stable agent
+-- identifier. Partial index because the column is nullable for
+-- pre-PR21 rows and writer paths that bypass the API-key context.
+CREATE INDEX idx_audit_log_agent_key
+    ON audit_log (tenant_id, agent_key_id)
+    WHERE agent_key_id IS NOT NULL;
 
 -- Audit Read API filter: enforce vs shadow over time, newest-first.
 CREATE INDEX idx_audit_log_decision_mode
     ON audit_log (tenant_id, decision_mode, timestamp_utc DESC);
 
--- Fail-closed events are the high-value alert surface. Partial index keeps
--- the predicate scan tiny since the vast majority of rows are NOT fail_closed.
+-- Fail-closed events are the high-value alert surface. Partial index
+-- keeps the predicate scan tiny since the vast majority of rows are
+-- NOT fail_closed.
 CREATE INDEX idx_audit_log_fail_closed
     ON audit_log (tenant_id, fail_closed)
     WHERE fail_closed = true;
 
--- Per-chunk decision rows. ONE row per candidate Engine.Execute scored,
--- regardless of allow/deny. The Leak Report joins this against the demo
--- corpus (or, in production, a real document attribution view) to produce
--- per-document denial summaries.
+-- ---------------------------------------------------------------------
+-- audit_log_decisions: normalised per-chunk rows
+-- ---------------------------------------------------------------------
+
+-- tenant_id is denormalised onto every decision row so the Leak
+-- Report's per-tenant queries don't need to JOIN through audit_log
+-- just to filter. Also acts as defense-in-depth for multi-tenant
+-- isolation: a missing tenant_id filter on a SQL query still gets
+-- caught by the column's NOT NULL semantics if combined with
+-- application-level tenant scoping.
 --
--- FK to audit_log(trace_id): audit_log.trace_id is UNIQUE (declared in
--- migration 003) so the foreign key is valid. ON DELETE CASCADE is
--- defensive: audit_log has a no_delete_audit rule (also declared in 003)
--- that blocks row deletes, so the cascade never actually fires in
--- production — but if a future migration ever lifts that rule the
--- decision rows will go with their parent rather than orphan.
+-- The writer guarantees this equals the parent audit_log.tenant_id;
+-- the contract is not enforced at the SQL level because audit_log
+-- only has a UNIQUE(trace_id) constraint, not a composite
+-- UNIQUE(trace_id, tenant_id) that a composite FK would require,
+-- and adding that composite UNIQUE on a hot write table is not
+-- worth the index bloat.
 CREATE TABLE audit_log_decisions (
     trace_id        TEXT    NOT NULL,
+    tenant_id       TEXT    NOT NULL,
     ordinal         INTEGER NOT NULL,
     chunk_id        TEXT    NOT NULL,
     document_id     TEXT,
@@ -62,20 +86,34 @@ CREATE TABLE audit_log_decisions (
     reason          TEXT,
     required_scope  TEXT,
     region          TEXT,
-    score           NUMERIC,
+    score           DOUBLE PRECISION,
     PRIMARY KEY (trace_id, ordinal),
     FOREIGN KEY (trace_id)
         REFERENCES audit_log (trace_id)
         ON DELETE CASCADE
 );
 
--- Leak Report hot path: "all decisions for document X".
+-- audit_log_decisions inherits the no_update / no_delete contract
+-- from audit_log: a decision row, once written, must be as
+-- write-once as its parent audit row. Without these rules, an
+-- attacker with table-write privileges could flip allowed=false ->
+-- allowed=true without breaking the audit chain (the chain doesn't
+-- cover per-chunk decisions in PR #21 — see the PR description for
+-- the explicit non-goal).
+CREATE RULE no_update_audit_decisions
+    AS ON UPDATE TO audit_log_decisions DO INSTEAD NOTHING;
+CREATE RULE no_delete_audit_decisions
+    AS ON DELETE TO audit_log_decisions DO INSTEAD NOTHING;
+
+-- Leak Report hot path: "all denials per document in this tenant".
+-- Composite partial index supports the tenant filter directly without
+-- joining audit_log.
+CREATE INDEX idx_audit_log_decisions_tenant_denied
+    ON audit_log_decisions (tenant_id, document_id)
+    WHERE allowed = false AND document_id IS NOT NULL;
+
+-- Cross-tenant forensic path: "all decisions for document X anywhere",
+-- used by ops/security review tooling.
 CREATE INDEX idx_audit_log_decisions_doc
     ON audit_log_decisions (document_id)
     WHERE document_id IS NOT NULL;
-
--- Tighter partial index for the denied-only fan-in (the Leak Report's
--- headline question is "denials on this document", not "all decisions").
-CREATE INDEX idx_audit_log_decisions_denied
-    ON audit_log_decisions (document_id)
-    WHERE allowed = false AND document_id IS NOT NULL;

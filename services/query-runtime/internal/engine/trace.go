@@ -44,15 +44,27 @@ type AuditEntry struct {
 	ImmutableDigest    string
 	PreviousHash       string
 
-	// AgentID is the human-readable name of the API key that made the call
-	// (TenantContext.KeyName, sourced from api_keys.name). PR #21 addition.
+	// AgentKeyID is the STABLE foreign-key identity of the API key that
+	// made the call (TenantContext.KeyID = api_keys.id). PR #21 addition.
+	// Used as the group-by key for Dashboard L2 and replay correlation;
+	// never changes once the key is created. Zero when the writer is
+	// invoked outside an API-key context (e.g. embedded test paths).
+	AgentKeyID int64
+
+	// AgentKeyName is the DISPLAY snapshot of the API key's name
+	// (TenantContext.KeyName = api_keys.name) at write time. Because
+	// api_keys.name is mutable (operators can rename keys), historical
+	// audit rows preserve the name as it was when the call landed; the
+	// Dashboard joins on AgentKeyID for grouping but renders AgentKeyName
+	// for display.
 	//
-	// Deliberately NOT in the digest payload (see ComputeDigest below) —
-	// pre-PR21 rows have agent_id NULL and must keep verifying under the
-	// old formula. The Audit Read API and Dashboard L2 are the consumers;
-	// if tamper-evidence on agent_id ever matters we'll bump the digest
-	// payload to v2 and gate verification by row version.
-	AgentID string
+	// Both AgentKey* fields are deliberately NOT in the digest payload
+	// (see ComputeDigest below). Pre-PR21 rows have both columns NULL
+	// and must keep verifying under the old formula. The Audit Read API
+	// and Dashboard L2 are the consumers; if tamper-evidence on caller
+	// attribution ever matters we'll bump the digest payload to v2 and
+	// gate verification by row version.
+	AgentKeyName string
 
 	// AccessDecisions is the per-chunk authorization outcome captured in
 	// the trace. PR #21 addition. Stored two ways inside the same
@@ -62,7 +74,12 @@ type AuditEntry struct {
 	//   - audit_log_decisions          (normalised one-row-per-chunk, for
 	//     the Leak Report's per-document fan-in)
 	//
-	// Like AgentID, deliberately NOT in the digest payload.
+	// Like the AgentKey* fields, deliberately NOT in the digest payload.
+	// This means a tampering attacker with table-write privileges who
+	// can defeat audit_log_decisions's no_update_audit_decisions rule
+	// could rewrite a chunk's allowed flag without invalidating the
+	// digest chain. Accepted tradeoff in PR #21 — the rules make the
+	// attack surface match what audit_log already has.
 	AccessDecisions []runtime.AccessDecision
 }
 
@@ -181,10 +198,11 @@ func (p *PostgresAuditWriter) Write(ctx context.Context, entry AuditEntry) error
 			principal_id,
 			immutable_digest,
 			previous_hash,
-			agent_id,
+			agent_key_id,
+			agent_key_name,
 			access_decisions
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 	`,
 		entry.TraceID,
 		entry.TenantID,
@@ -210,7 +228,8 @@ func (p *PostgresAuditWriter) Write(ctx context.Context, entry AuditEntry) error
 		entry.PrincipalID,
 		entry.ImmutableDigest,
 		nullString(entry.PreviousHash),
-		nullString(entry.AgentID),
+		nullInt64(entry.AgentKeyID),
+		nullString(entry.AgentKeyName),
 		nullJSONB(entry.AccessDecisions, decisionsJSON),
 	); err != nil {
 		return err
@@ -222,25 +241,33 @@ func (p *PostgresAuditWriter) Write(ctx context.Context, entry AuditEntry) error
 	// document_id when the trace didn't carry one (e.g. fail-closed paths
 	// that recorded a single synthetic deny decision with no chunk).
 	if len(entry.AccessDecisions) > 0 {
+		// 10 columns per row: trace_id, tenant_id, ordinal, chunk_id,
+		// document_id, allowed, reason, required_scope, region, score.
+		// tenant_id is denormalised here (PR #21 CI-3) so the Leak
+		// Report's per-tenant queries don't need to JOIN audit_log
+		// just to filter. The writer pins it equal to the parent
+		// audit_log.tenant_id under the same advisory lock.
+		const colsPerRow = 10
 		var sb strings.Builder
 		sb.WriteString(`
 			INSERT INTO audit_log_decisions (
-				trace_id, ordinal, chunk_id, document_id,
+				trace_id, tenant_id, ordinal, chunk_id, document_id,
 				allowed, reason, required_scope, region, score
 			) VALUES `)
-		args := make([]any, 0, len(entry.AccessDecisions)*9)
+		args := make([]any, 0, len(entry.AccessDecisions)*colsPerRow)
 		for i, d := range entry.AccessDecisions {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			base := i * 9
+			base := i * colsPerRow
 			fmt.Fprintf(&sb,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				base+1, base+2, base+3, base+4, base+5,
-				base+6, base+7, base+8, base+9,
+				base+6, base+7, base+8, base+9, base+10,
 			)
 			args = append(args,
 				entry.TraceID,
+				entry.TenantID,
 				i,
 				d.ChunkID,
 				nullString(d.DocumentID),
@@ -379,6 +406,18 @@ func nullString(value string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: value, Valid: true}
+}
+
+// nullInt64 returns SQL NULL when the input is zero (so audit rows
+// without an API-key context store NULL rather than 0, keeping the
+// idx_audit_log_agent_key partial index tight) and the value
+// otherwise. api_keys.id is a BIGSERIAL starting at 1, so a real
+// AgentKeyID is never zero.
+func nullInt64(value int64) sql.NullInt64 {
+	if value == 0 {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: value, Valid: true}
 }
 
 // nullJSONB returns NULL when the input slice is empty (so audit rows with

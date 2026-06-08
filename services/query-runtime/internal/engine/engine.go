@@ -380,14 +380,18 @@ func auditEntryFromTrace(trace runtime.RuntimeTrace, req runtime.QueryRequest) A
 		Reason:              reason,
 		IdentityResolution:  identityResolution,
 		PrincipalID:         principalID,
-		// PR #21: agent attribution + per-chunk decisions. AgentID is the
-		// API key name set by server.query before Execute is invoked
-		// (empty when no key context is available, e.g. embedded use).
-		// AccessDecisions are pulled straight off the trace — the engine
-		// already accumulates them per chunk; this just carries them onto
-		// the audit row for the Replay engine + Leak Report. Both fields
-		// are non-chained metadata (see ComputeDigest in trace.go).
-		AgentID:         req.AgentID,
+		// PR #21: agent attribution + per-chunk decisions.
+		//   AgentKeyID is the stable api_keys.id of the calling key
+		//     (TenantContext.KeyID, set by server.query before Execute
+		//     is invoked). Zero when no key context is available.
+		//   AgentKeyName is the snapshot of api_keys.name at write time.
+		//   AccessDecisions are pulled straight off the trace — the
+		//     engine already accumulates them per chunk; this just
+		//     carries them onto the audit row for Replay + Leak Report.
+		// All three fields are non-chained metadata (see ComputeDigest
+		// in trace.go).
+		AgentKeyID:      req.AgentKeyID,
+		AgentKeyName:    req.AgentKeyName,
 		AccessDecisions: trace.AccessDecisions,
 	}
 }

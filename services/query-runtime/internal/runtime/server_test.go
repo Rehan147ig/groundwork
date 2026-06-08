@@ -27,7 +27,7 @@ func (m *mockExecutor) Execute(ctx context.Context, req QueryRequest) QueryRespo
 }
 
 // capturingExecutor records the QueryRequest it was called with so tests can
-// assert what server.query plumbed in (tenant, region, agent_id, etc.).
+// assert what server.query plumbed in (tenant, region, agent key id/name, etc.).
 type capturingExecutor struct {
 	last QueryRequest
 }
@@ -380,12 +380,13 @@ func TestQueryDemoModeAllowsBodyUserID(t *testing.T) {
 	}
 }
 
-// TestQueryStampsAgentIDFromAPIKey verifies that the PR #21 agent_id
-// plumbing works: the API key's name (TenantContext.KeyName) is set on
-// the QueryRequest BEFORE the executor sees it, and it cannot be set
-// from the request body. AgentID lands on the audit row downstream
-// (engine.auditEntryFromTrace copies it onto AuditEntry.AgentID).
-func TestQueryStampsAgentIDFromAPIKey(t *testing.T) {
+// TestQueryStampsAgentKeyFromAPIKey verifies that the PR #21 agent
+// attribution plumbing works: both the stable KeyID and the display
+// KeyName are set on QueryRequest BEFORE the executor sees it, and
+// neither can be set from the request body. Both land on the audit row
+// downstream (engine.auditEntryFromTrace copies them onto
+// AuditEntry.AgentKeyID / AgentKeyName).
+func TestQueryStampsAgentKeyFromAPIKey(t *testing.T) {
 	backend := NewMemoryBackend()
 	apiKeys := NewMemoryAPIKeyResolver("gw_test_key", TenantContext{
 		TenantID: "tenant_demo", Region: "uk", KeyName: "treasury-agent",
@@ -394,9 +395,9 @@ func TestQueryStampsAgentIDFromAPIKey(t *testing.T) {
 	server := NewServerWithExecutor(Config{}, backend, apiKeys, captor)
 	server.allowDemoIdentity = true
 
-	// Attempt to inject a forged agent_id via the request body — should
-	// be ignored because QueryRequest.AgentID has json:"-".
-	body := `{"user_id":"user_1","question":"test","AgentID":"forged"}`
+	// Attempt to inject forged agent attribution via the request body —
+	// both fields are json:"-" and must be ignored.
+	body := `{"user_id":"user_1","question":"test","AgentKeyID":9999,"AgentKeyName":"forged"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
 	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
 	rec := httptest.NewRecorder()
@@ -405,7 +406,11 @@ func TestQueryStampsAgentIDFromAPIKey(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if captor.last.AgentID != "treasury-agent" {
-		t.Fatalf("agent_id must come from TenantContext.KeyName, got %q", captor.last.AgentID)
+	// MemoryAPIKeyResolver assigns KeyID = 1 to the bootstrap key.
+	if captor.last.AgentKeyID != 1 {
+		t.Fatalf("AgentKeyID must come from TenantContext.KeyID (stable api_keys.id), got %d", captor.last.AgentKeyID)
+	}
+	if captor.last.AgentKeyName != "treasury-agent" {
+		t.Fatalf("AgentKeyName must come from TenantContext.KeyName, got %q", captor.last.AgentKeyName)
 	}
 }

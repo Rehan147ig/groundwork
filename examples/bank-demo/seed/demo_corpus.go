@@ -46,7 +46,13 @@ func seedDemoCorpus(ctx context.Context, db *sql.DB, g *personaGraph, corpusDir 
 		title := docTitle(corpusDir, doc.File, doc.ID)
 		sensitivityLabel := sensitivityFromFolder(doc.Folder)
 		owner := ownerFromExtraViewers(doc.ExtraViewers)
-		anonymous := doc.Folder == "tier_public" // tier_public is the all-staff readable tier; treat as "broadly accessible" (closest demo analog to an anonymous share)
+		// PR #21 CI-4: anonymous_share == "exposed via a no-auth public
+		// link", the headline Leak Report finding. None of the personas.json
+		// documents model this — tier_public is "all employees can read",
+		// which is a different (and much less alarming) risk. Always set
+		// false here. Explicit anonymous-share fixtures for the Leak
+		// Report come in PR #24 alongside the report itself.
+		anonymous := false
 
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO demo.documents

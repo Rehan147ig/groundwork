@@ -54,9 +54,9 @@ const (
 )
 
 type personaGraph struct {
-	TenantID  string `json:"tenant_id"`
-	Region    string `json:"region"`
-	Personas  []struct {
+	TenantID string `json:"tenant_id"`
+	Region   string `json:"region"`
+	Personas []struct {
 		ID          string   `json:"id"`
 		DisplayName string   `json:"display_name"`
 		Role        string   `json:"role"`

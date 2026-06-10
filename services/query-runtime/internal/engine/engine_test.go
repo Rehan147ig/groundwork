@@ -662,10 +662,10 @@ func (failingAudit) Write(context.Context, AuditEntry) error {
 // window, it does not bypass the audit step.
 func TestExecuteFailsClosedWhenAuditCircuitOpen(t *testing.T) {
 	e := Engine{
-		Config:       testTimeouts(),
-		Backend:      fakeRetrieval{candidates: testCandidates(1)},
-		ACL:          slowACL{allowed: true},
-		Auditor:      failingAudit{},
+		Config:  testTimeouts(),
+		Backend: fakeRetrieval{candidates: testCandidates(1)},
+		ACL:     slowACL{allowed: true},
+		Auditor: failingAudit{},
 		// 1-failure breaker so the second call should already see it open.
 		AuditCircuit: NewCircuitBreaker(1, time.Second),
 	}

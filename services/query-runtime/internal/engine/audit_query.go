@@ -195,13 +195,13 @@ func (p *PostgresAuditReader) GetAuditEntry(ctx context.Context, tenantID, trace
 	`, tenantID, traceID)
 
 	var (
-		read                                                                       runtime.AuditEntryRead
-		failStage, errorCode, errorMessage, previousHash, agentKeyName, regionCol  sql.NullString
-		decisionMode, aclDecision, reason, identityResolution, principalID         sql.NullString
-		circuitBreakerState                                                        sql.NullString
-		openfga, qdrant, agentKeyID                                                sql.NullInt64
-		decisionsBlob                                                              sql.NullString
-		ts                                                                         time.Time
+		read                                                                      runtime.AuditEntryRead
+		failStage, errorCode, errorMessage, previousHash, agentKeyName, regionCol sql.NullString
+		decisionMode, aclDecision, reason, identityResolution, principalID        sql.NullString
+		circuitBreakerState                                                       sql.NullString
+		openfga, qdrant, agentKeyID                                               sql.NullInt64
+		decisionsBlob                                                             sql.NullString
+		ts                                                                        time.Time
 	)
 	err := row.Scan(
 		&read.TraceID, &read.TenantID, &read.UserID, &read.QueryHash, &ts, &regionCol,
@@ -371,10 +371,10 @@ func (p *PostgresAuditReader) ListAuditStats(ctx context.Context, tenantID strin
 	defer rows.Close()
 	for rows.Next() {
 		var (
-			kind    string
-			strKey  sql.NullString
-			numKey  sql.NullInt64
-			count   int
+			kind   string
+			strKey sql.NullString
+			numKey sql.NullInt64
+			count  int
 		)
 		if err := rows.Scan(&kind, &strKey, &numKey, &count); err != nil {
 			return runtime.AuditStats{}, fmt.Errorf("scan stats: %w", err)
@@ -461,13 +461,13 @@ func (p *PostgresAuditReader) VerifyTenantChain(ctx context.Context, tenantID st
 // GetAuditEntry's inline scan populates them for the detail endpoint.
 func scanReadRow(rows *sql.Rows) (runtime.AuditEntryRead, string, error) {
 	var (
-		read                                                                runtime.AuditEntryRead
-		failStage, errorCode, errorMessage, agentKeyName, regionCol         sql.NullString
-		decisionMode, aclDecision, reason, identityResolution, principalID  sql.NullString
-		circuitBreakerState                                                 sql.NullString
-		openfga, qdrant, agentKeyID                                         sql.NullInt64
-		ts                                                                  time.Time
-		id                                                                  string
+		read                                                               runtime.AuditEntryRead
+		failStage, errorCode, errorMessage, agentKeyName, regionCol        sql.NullString
+		decisionMode, aclDecision, reason, identityResolution, principalID sql.NullString
+		circuitBreakerState                                                sql.NullString
+		openfga, qdrant, agentKeyID                                        sql.NullInt64
+		ts                                                                 time.Time
+		id                                                                 string
 	)
 	if err := rows.Scan(
 		&read.TraceID, &read.TenantID, &read.UserID, &read.QueryHash, &ts, &regionCol,

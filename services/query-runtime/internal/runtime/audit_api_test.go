@@ -603,8 +603,12 @@ func TestAuditVerify_ReportsProblems(t *testing.T) {
 
 func TestAuditNoMutationEndpoints(t *testing.T) {
 	server := newAuditServer(fakeAuditReader{
-		listFn:   func(ctx context.Context, _ string, _ AuditFilter, _ int, _ string) (AuditPage, error) { return AuditPage{}, nil },
-		getFn:    func(ctx context.Context, _, _ string) (AuditEntryRead, error) { return AuditEntryRead{}, ErrAuditEntryNotFound },
+		listFn: func(ctx context.Context, _ string, _ AuditFilter, _ int, _ string) (AuditPage, error) {
+			return AuditPage{}, nil
+		},
+		getFn: func(ctx context.Context, _, _ string) (AuditEntryRead, error) {
+			return AuditEntryRead{}, ErrAuditEntryNotFound
+		},
 		statsFn:  func(ctx context.Context, _ string, _, _ time.Time) (AuditStats, error) { return AuditStats{}, nil },
 		verifyFn: func(ctx context.Context, _ string) (AuditVerifyResult, error) { return AuditVerifyResult{}, nil },
 	})

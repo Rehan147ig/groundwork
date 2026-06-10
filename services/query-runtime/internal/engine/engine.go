@@ -42,7 +42,22 @@ type Engine struct {
 
 	RetrievalCircuit *CircuitBreaker
 	ACLCircuit       *CircuitBreaker
-	mu               sync.Mutex
+	// AuditCircuit fast-fails audit writes after the Postgres audit_log
+	// is repeatedly unreachable. PR #22 HA review fix #2: today, a
+	// dead/slow Postgres lets thousands of concurrent goroutines all wait
+	// the full AUDIT_TIMEOUT_MS before fail-closed; the breaker collapses
+	// that into one detection + fast-fail-closed for subsequent queries
+	// during the outage. Fail-closed behavior is PRESERVED — when the
+	// breaker is open, writeAudit returns an error and the existing
+	// failClosed path in Execute returns zero citations to the agent
+	// (TestAuditWrite_FailsEngine pins this).
+	//
+	// Threshold tuning: 5 failures within 30s is more forgiving than the
+	// retrieval/ACL breakers (3 / 10s) because audit-write failures can
+	// include transient lock contention; we don't want a brief lock
+	// queue depth to open the breaker.
+	AuditCircuit *CircuitBreaker
+	mu           sync.Mutex
 }
 
 func (e *Engine) Execute(ctx context.Context, req runtime.QueryRequest) runtime.QueryResponse {
@@ -274,9 +289,31 @@ func (e *Engine) writeAudit(ctx context.Context, cfg TimeoutConfig, trace runtim
 	if e.Auditor == nil {
 		return errors.New("audit writer unavailable")
 	}
+	// PR #22 HA fix #2: short-circuit when the audit DB is repeatedly
+	// unreachable. When the breaker is OPEN, the write fast-fails;
+	// Execute's caller maps the error to failClosed("audit", ...) and
+	// the agent receives zero citations. Fail-closed PRESERVED.
+	e.mu.Lock()
+	if e.AuditCircuit == nil {
+		e.AuditCircuit = NewCircuitBreaker(5, 30*time.Second)
+	}
+	auditCircuit := e.AuditCircuit
+	e.mu.Unlock()
+	if err := auditCircuit.Allow(); err != nil {
+		gwmetrics.SetCircuitBreakerState("audit", circuitMetricState(auditCircuit.State()))
+		return err
+	}
+
 	auditCtx, cancel := context.WithTimeout(ctx, cfg.AuditWrite)
 	defer cancel()
-	return e.Auditor.Write(auditCtx, auditEntryFromTrace(trace, req))
+	err := e.Auditor.Write(auditCtx, auditEntryFromTrace(trace, req))
+	if err != nil {
+		auditCircuit.ReportFailure()
+	} else {
+		auditCircuit.ReportSuccess()
+	}
+	gwmetrics.SetCircuitBreakerState("audit", circuitMetricState(auditCircuit.State()))
+	return err
 }
 
 func (e *Engine) failClosed(ctx context.Context, req runtime.QueryRequest, started time.Time, stage string, code string, err error) runtime.QueryResponse {

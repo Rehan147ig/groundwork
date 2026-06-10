@@ -41,23 +41,13 @@ ALTER TABLE audit_log ADD COLUMN agent_key_name TEXT;
 -- read shape doesn't want a JOIN).
 ALTER TABLE audit_log ADD COLUMN access_decisions JSONB;
 
--- Dashboard L2 groups the tenant landing page by the stable agent
--- identifier. Partial index because the column is nullable for
--- pre-PR21 rows and writer paths that bypass the API-key context.
-CREATE INDEX idx_audit_log_agent_key
-    ON audit_log (tenant_id, agent_key_id)
-    WHERE agent_key_id IS NOT NULL;
-
--- Audit Read API filter: enforce vs shadow over time, newest-first.
-CREATE INDEX idx_audit_log_decision_mode
-    ON audit_log (tenant_id, decision_mode, timestamp_utc DESC);
-
--- Fail-closed events are the high-value alert surface. Partial index
--- keeps the predicate scan tiny since the vast majority of rows are
--- NOT fail_closed.
-CREATE INDEX idx_audit_log_fail_closed
-    ON audit_log (tenant_id, fail_closed)
-    WHERE fail_closed = true;
+-- NOTE: The five partial indexes that originally lived here (on
+-- audit_log AND audit_log_decisions) moved to migration 013
+-- (013_extend_audit_log_indexes_concurrently). 013 runs OUTSIDE a
+-- transaction so it can CREATE INDEX CONCURRENTLY — that's the only
+-- way to add indexes to a hot table without an ACCESS EXCLUSIVE lock
+-- blocking audit-log writes for the duration of the build. PR #22
+-- review MB-1.
 
 -- ---------------------------------------------------------------------
 -- audit_log_decisions: normalised per-chunk rows
@@ -105,15 +95,6 @@ CREATE RULE no_update_audit_decisions
 CREATE RULE no_delete_audit_decisions
     AS ON DELETE TO audit_log_decisions DO INSTEAD NOTHING;
 
--- Leak Report hot path: "all denials per document in this tenant".
--- Composite partial index supports the tenant filter directly without
--- joining audit_log.
-CREATE INDEX idx_audit_log_decisions_tenant_denied
-    ON audit_log_decisions (tenant_id, document_id)
-    WHERE allowed = false AND document_id IS NOT NULL;
-
--- Cross-tenant forensic path: "all decisions for document X anywhere",
--- used by ops/security review tooling.
-CREATE INDEX idx_audit_log_decisions_doc
-    ON audit_log_decisions (document_id)
-    WHERE document_id IS NOT NULL;
+-- (Indexes for audit_log_decisions also live in migration 013 — see
+-- the note above on why CREATE INDEX CONCURRENTLY needs its own
+-- non-transactional migration.)

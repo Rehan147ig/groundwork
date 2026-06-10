@@ -30,12 +30,48 @@ type Server struct {
 	// cmd/query-runtime — the engine package supplies a Postgres impl
 	// that internally reuses engine.LoadAuditChain / VerifyChain.
 	auditReader AuditReader
+
+	// readinessProbes is the optional set of dependency probes that
+	// /readyz invokes on every call. PR #22 HA fix #3: today /readyz
+	// only checks struct wiring, so a dead Postgres still reports 200
+	// and k8s keeps routing /v1/query traffic to a pod that will
+	// fail-closed on every request. Each probe returns nil on healthy,
+	// non-nil on unhealthy. Wired via AddReadinessProbe from
+	// cmd/query-runtime. Empty (the default for tests / local mode)
+	// preserves the original behavior — struct-wiring check only.
+	readinessProbes []ReadinessProbe
+}
+
+// ReadinessProbe is one /readyz dependency check. Implementations must
+// return quickly (probes run synchronously inside the readyz handler
+// with a short outer timeout); a probe that hangs blocks the entire
+// readyz response, which Kubernetes interprets as failure on
+// readinessProbe timeout. Name is rendered in the JSON response body
+// when the probe fails.
+type ReadinessProbe struct {
+	Name  string
+	Check func(ctx context.Context) error
 }
 
 // SetRateLimiter wires the per-API-key request/minute limiter. When set, authenticated
 // requests that exceed their key's rate_limit_rpm budget are rejected with 429. When unset
 // (nil), no limiting is applied — so local/demo and existing tests are unaffected.
 func (s *Server) SetRateLimiter(rl *RateLimiter) { s.limiter = rl }
+
+// AddReadinessProbe registers one dependency probe with /readyz. Probes
+// are invoked sequentially on every readyz request with a short outer
+// timeout; the first failure short-circuits and returns 503. PR #22 HA
+// fix #3. Callers typically register a Postgres ping ("postgres") and
+// OpenFGA reachability ("openfga"); the actual probes live in
+// cmd/query-runtime where the *sql.DB and OpenFGAChecker handles are
+// available. Order matters only insofar as the first failing probe is
+// reported as the reason.
+func (s *Server) AddReadinessProbe(p ReadinessProbe) {
+	if p.Check == nil {
+		return
+	}
+	s.readinessProbes = append(s.readinessProbes, p)
+}
 
 // SetIdentity wires the end-user identity verifier and the demo-identity switch.
 // When allowDemo is false and no valid assertion is present, /v1/query fails closed.
@@ -105,7 +141,7 @@ func (s *Server) livez(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "alive"})
 }
 
-func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	if s.apiKeys == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "api_key_resolver_unavailable"})
 		return
@@ -113,6 +149,26 @@ func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
 	if s.executor == nil && (s.backend.Vector == nil || s.backend.ACL == nil || s.backend.Trace == nil) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "runtime_backend_unavailable"})
 		return
+	}
+	// PR #22 HA fix #3: probe registered dependencies (Postgres,
+	// OpenFGA) on every call. A dead dependency removes this pod from
+	// the LB via k8s readiness; other pods continue to serve. Total
+	// probe budget is bounded so a slow probe doesn't extend the readyz
+	// response indefinitely (k8s would interpret a hung readyz as
+	// failure on readinessProbe.timeoutSeconds anyway).
+	if len(s.readinessProbes) > 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		for _, probe := range s.readinessProbes {
+			if err := probe.Check(ctx); err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"status": "not_ready",
+					"reason": "dependency_unhealthy",
+					"probe":  probe.Name,
+				})
+				return
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }

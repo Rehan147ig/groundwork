@@ -50,6 +50,29 @@ type AuditReader interface {
 // must return exactly this sentinel so the handler maps it to 404.
 var ErrAuditEntryNotFound = errors.New("audit_entry_not_found")
 
+// MaxAuditVerifyEntries caps the number of audit_log rows the
+// /v1/audit/verify endpoint will load for a single tenant. Chain
+// verification is fundamentally linear (each digest depends on the
+// prior) so we cannot paginate it; capping at 100k keeps the worst-case
+// memory + CPU footprint bounded. PR #22 R-1.
+const MaxAuditVerifyEntries = 100_000
+
+// ChainTooLargeError is returned by AuditReader.VerifyTenantChain
+// when the tenant's audit chain exceeds MaxAuditVerifyEntries.
+// Implementations should NOT begin loading; they should count first
+// and return this sentinel so the handler can map it to 413
+// chain_too_large without buffering 100k+ rows server-side. PR #22 R-1.
+type ChainTooLargeError struct {
+	EntriesChecked int
+	MaxAllowed     int
+}
+
+func (e *ChainTooLargeError) Error() string {
+	return "audit chain too large to verify in a single call: " +
+		strconv.Itoa(e.EntriesChecked) + " entries (max " +
+		strconv.Itoa(e.MaxAllowed) + ")"
+}
+
 // AuditFilter is the parsed query string for GET /v1/audit. Empty or
 // zero fields are treated as "no filter". TenantID is never in this
 // struct — the calling tenant is sourced from the API-key context and
@@ -57,6 +80,8 @@ var ErrAuditEntryNotFound = errors.New("audit_entry_not_found")
 type AuditFilter struct {
 	AgentKeyID   int64
 	DecisionMode string
+	ACLDecision  string // PR #22 R-3: filter by allowed / denied / fail_closed
+	Region       string // PR #22 R-3: filter by region (multi-region tenants)
 	FailClosed   *bool
 	UserID       string
 	From         time.Time
@@ -243,6 +268,16 @@ type ChainProblemPayload struct {
 	Detail  string `json:"detail"`
 }
 
+// ChainTooLargeResponse is the 413 body shape for GET /v1/audit/verify
+// when the tenant's chain exceeds MaxAuditVerifyEntries. PR #22 R-1.
+// The Dashboard renders the count + cap so operators understand WHY
+// the call was refused.
+type ChainTooLargeResponse struct {
+	Error          string `json:"error"`
+	EntriesChecked int    `json:"entries_checked"`
+	MaxAllowed     int    `json:"max_allowed"`
+}
+
 // SetAuditReader wires the read-side AuditReader the audit endpoints
 // dispatch through. Nil-safe: when unset, /v1/audit* returns 503
 // audit_unavailable.
@@ -294,6 +329,15 @@ func (s *Server) auditList(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := strings.TrimSpace(q.Get("decision_mode")); v != "" {
 		filter.DecisionMode = v
+	}
+	// PR #22 R-3: Dashboard L2 wants "show me denials only" and a
+	// per-region split. Both are exact-match string filters mirroring
+	// the audit_log columns.
+	if v := strings.TrimSpace(q.Get("acl_decision")); v != "" {
+		filter.ACLDecision = v
+	}
+	if v := strings.TrimSpace(q.Get("region")); v != "" {
+		filter.Region = v
 	}
 	if v := strings.TrimSpace(q.Get("fail_closed")); v != "" {
 		b, err := strconv.ParseBool(v)
@@ -490,6 +534,19 @@ func (s *Server) auditVerify(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	result, err := s.auditReader.VerifyTenantChain(ctx, tenant.TenantID)
 	if err != nil {
+		// PR #22 R-1: oversized chains return 413 with a structured
+		// body so the Dashboard / replay tooling can show the actual
+		// count and the configured cap. Implementations refuse
+		// without loading the chain.
+		var tooLarge *ChainTooLargeError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, ChainTooLargeResponse{
+				Error:          "chain_too_large",
+				EntriesChecked: tooLarge.EntriesChecked,
+				MaxAllowed:     tooLarge.MaxAllowed,
+			})
+			return
+		}
 		writeAuditError(w, http.StatusInternalServerError, "audit_verify_failed")
 		return
 	}

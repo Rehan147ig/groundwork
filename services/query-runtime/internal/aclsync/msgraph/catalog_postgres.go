@@ -73,8 +73,8 @@ INSERT INTO msgraph.groups (
 )
 VALUES ($1, $2, $3, $4, NOW(), NOW())
 ON CONFLICT (tenant_id, entra_group_id) DO UPDATE SET
-    display_name = EXCLUDED.display_name,
-    group_type   = EXCLUDED.group_type,
+    display_name = COALESCE(EXCLUDED.display_name, msgraph.groups.display_name),
+    group_type   = COALESCE(EXCLUDED.group_type,   msgraph.groups.group_type),
     last_seen_at = NOW(),
     updated_at   = NOW()
 `

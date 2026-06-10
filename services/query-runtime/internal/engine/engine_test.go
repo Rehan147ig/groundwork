@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -492,11 +494,28 @@ func auditTestDB(t *testing.T) *sql.DB {
 
 func installAuditMigration(t *testing.T, db *sql.DB) {
 	t.Helper()
+	// audit_log_decisions FK-references audit_log so drop it first; then
+	// drop audit_log itself (CASCADE removes the no_update / no_delete rules).
+	_, _ = db.Exec(`DROP TABLE IF EXISTS audit_log_decisions CASCADE`)
 	_, _ = db.Exec(`DROP TABLE IF EXISTS audit_log CASCADE`)
 	for _, name := range []string{
 		"003_create_audit_log.up.sql",
 		"004_add_previous_hash.up.sql",
 		"005_add_audit_decision_columns.up.sql",
+		"007_add_audit_identity_columns.up.sql",
+		// PR #21: agent_key_id + agent_key_name + access_decisions
+		// columns on audit_log, plus the audit_log_decisions table.
+		// PostgresAuditWriter.Write references these columns, so the
+		// rule-tests fail without it.
+		"011_extend_audit_log.up.sql",
+		// PR #22 MB-1: the partial indexes on audit_log and
+		// audit_log_decisions live in 013 (CREATE INDEX CONCURRENTLY
+		// to avoid blocking writes during build). pgx's multi-statement
+		// Exec wraps in an implicit transaction which CONCURRENTLY
+		// rejects, so this file is applied via execNonTxStatements
+		// below (splits on `;` and Execs each statement individually,
+		// which the simple-query autocommit path accepts).
+		"013_extend_audit_log_indexes_concurrently.up.sql",
 	} {
 		sqlText, err := os.ReadFile("../../../../migrations/" + name)
 		if err != nil {
@@ -505,10 +524,60 @@ func installAuditMigration(t *testing.T, db *sql.DB) {
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)
 		}
-		if _, err := db.Exec(string(sqlText)); err != nil {
+		runner := execMigration
+		if strings.HasPrefix(name, "013_") {
+			runner = execNonTxStatements
+		}
+		if err := runner(db, string(sqlText)); err != nil {
 			t.Fatalf("execute migration %s: %v", name, err)
 		}
 	}
+}
+
+// execMigration runs a migration file as a single batched Exec. Used
+// for ordinary (transactional) migrations.
+func execMigration(db *sql.DB, sqlText string) error {
+	_, err := db.Exec(sqlText)
+	return err
+}
+
+// execNonTxStatements is the workaround for migrations that contain
+// CREATE INDEX CONCURRENTLY (or any other statement Postgres rejects
+// inside a transaction). It strips comments, splits on top-level `;`,
+// and Execs each statement separately so pgx's simple-query autocommit
+// path handles each one with no implicit BEGIN/COMMIT around it.
+func execNonTxStatements(db *sql.DB, sqlText string) error {
+	for _, raw := range strings.Split(sqlText, ";") {
+		stmt := stripSQLComments(raw)
+		if stmt == "" {
+			continue
+		}
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("exec %q: %w", firstLine(stmt), err)
+		}
+	}
+	return nil
+}
+
+func stripSQLComments(s string) string {
+	out := make([]string, 0, 8)
+	for _, line := range strings.Split(s, "\n") {
+		// strip line comments (`-- foo`) but keep the SQL before them
+		if i := strings.Index(line, "--"); i >= 0 {
+			line = line[:i]
+		}
+		if t := strings.TrimSpace(line); t != "" {
+			out = append(out, t)
+		}
+	}
+	return strings.TrimSpace(strings.Join(out, " "))
+}
+
+func firstLine(s string) string {
+	if i := strings.Index(s, "\n"); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func testAuditEntry(traceID string) AuditEntry {
@@ -584,4 +653,35 @@ type failingAudit struct{}
 
 func (failingAudit) Write(context.Context, AuditEntry) error {
 	return errors.New("audit insert failed")
+}
+
+// TestExecuteFailsClosedWhenAuditCircuitOpen pins the PR #22 HA fix #2
+// contract: when the audit DB has been repeatedly unreachable (breaker
+// OPEN), Execute fast-fails the audit write and returns zero citations.
+// Fail-closed is PRESERVED — the breaker shortens the failure detection
+// window, it does not bypass the audit step.
+func TestExecuteFailsClosedWhenAuditCircuitOpen(t *testing.T) {
+	e := Engine{
+		Config:       testTimeouts(),
+		Backend:      fakeRetrieval{candidates: testCandidates(1)},
+		ACL:          slowACL{allowed: true},
+		Auditor:      failingAudit{},
+		// 1-failure breaker so the second call should already see it open.
+		AuditCircuit: NewCircuitBreaker(1, time.Second),
+	}
+	req := runtime.QueryRequest{TenantID: "acme", Region: "US", UserID: "finance_user", Question: "policy"}
+
+	first := e.Execute(context.Background(), req)
+	if first.Trace.FailureStage != "audit" {
+		t.Fatalf("first call: expected audit fail_closed, got %+v", first.Trace)
+	}
+	// First failure reported → breaker OPEN. Second call must fast-fail
+	// without ever reaching the auditor.
+	second := e.Execute(context.Background(), req)
+	if second.Trace.FailureStage != "audit" {
+		t.Fatalf("second call: expected audit fail_closed via open breaker, got %+v", second.Trace)
+	}
+	if len(second.Citations) != 0 {
+		t.Fatalf("open audit breaker must return zero citations (fail-closed preserved), got %+v", second.Citations)
+	}
 }

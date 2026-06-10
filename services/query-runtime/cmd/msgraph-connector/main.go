@@ -1,30 +1,27 @@
-// Command msgraph-connector authenticates to Microsoft Graph, instantiates
-// the aclsync.Service against a Microsoft Graph connector, and executes
-// Service.RunOnce. PR #18 of the Microsoft Graph pilot.
+// Command msgraph-connector enumerates a customer's Microsoft Entra directory
+// (users + groups + memberships) and persists the result into the msgraph.*
+// catalog tables. PR #19 of the Microsoft Graph pilot — "directory
+// enumeration, visibility only".
 //
-// Scope intentionally narrow:
-//   - Authenticate to Microsoft Graph (OAuth2 client credentials).
-//   - Wire msgraph.Connector + aclsync.Service together.
-//   - Execute Service.RunOnce so the full pipeline is exercised end-to-end.
-//
-// Explicit non-goals for this build:
-//   - No OpenFGA writes: the Sink is aclsync.DiscardSink, which records what
-//     would have been written but never contacts OpenFGA.
-//   - No SharePoint enumeration: the GraphClient is wrapped by a
-//     directory-only decorator that makes ListDriveItems and
-//     ListItemPermissions return empty slices, so Snapshot covers users +
-//     groups + memberships only.
+// Explicit non-goals for this build (all deferred to PR #20+):
+//   - No OpenFGA writes. No tuple generation.
+//   - No SharePoint, site, drive, or document enumeration.
+//   - No replay, no shadow mode, no leak report.
+//   - No canonical principal resolution; gw_canonical_id is stored as the
+//     placeholder "entra:<oid>" for later replacement.
 //
 // Exit codes:
 //
 //	0  success
-//	1  required env var missing (env validation; same as PR #17)
-//	2  FGA invariant violation: connector attempted /authorization-models
-//	3  RunOnce failed (auth, network, Graph error, etc.)
+//	1  required env var missing
+//	2  FGA invariant violation (reserved; unreachable in PR #19 — no OpenFGA writes)
+//	3  directory enumeration failed (auth, network, Graph error)
+//	4  Postgres unavailable (connection or ping)
 package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,7 +29,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"groundwork/query-runtime/internal/aclsync"
+	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver registers itself as "pgx"
+
 	"groundwork/query-runtime/internal/aclsync/msgraph"
 )
 
@@ -44,7 +42,7 @@ var requiredEnv = []string{
 }
 
 // validate returns the names of required env vars that are unset or empty.
-// Factored out of main() so tests exercise it without spawning a subprocess.
+// Factored out so tests exercise it without spawning a subprocess.
 func validate(getenv func(string) string) []string {
 	var missing []string
 	for _, k := range requiredEnv {
@@ -52,7 +50,22 @@ func validate(getenv func(string) string) []string {
 			missing = append(missing, k)
 		}
 	}
+	// DATABASE_URL is new in PR #19. Either DATABASE_URL (runtime convention)
+	// or POSTGRES_URL (compose convention from PR #17) is acceptable — at
+	// least one must be set.
+	if getenv("DATABASE_URL") == "" && getenv("POSTGRES_URL") == "" {
+		missing = append(missing, "DATABASE_URL_or_POSTGRES_URL")
+	}
 	return missing
+}
+
+// dbURL returns the Postgres connection string, preferring DATABASE_URL
+// (runtime convention) over POSTGRES_URL (compose convention).
+func dbURL(getenv func(string) string) string {
+	if v := getenv("DATABASE_URL"); v != "" {
+		return v
+	}
+	return getenv("POSTGRES_URL")
 }
 
 func main() {
@@ -67,48 +80,55 @@ func main() {
 		TenantID:     os.Getenv("MSGRAPH_TENANT_ID"),
 		ClientID:     os.Getenv("MSGRAPH_CLIENT_ID"),
 		ClientSecret: os.Getenv("MSGRAPH_CLIENT_SECRET"),
-		// SiteID + DriveID intentionally empty in PR #18; the directory-only
-		// decorator below skips drive operations regardless.
 	}
 
-	// Real HTTP client to Microsoft Graph + token endpoint.
-	graphClient := msgraph.NewHTTPGraphClient(cfg)
-
-	// Wrap with a decorator that makes drive operations no-ops. Snapshot then
-	// covers users + groups + memberships only.
-	directoryOnly := newDirectoryOnlyGraphClient(graphClient)
-
-	// Connector implements aclsync.Connector against the wrapped GraphClient.
-	// nil delta-token store is fine here: PR #18 calls RunOnce (no watch).
-	connector := msgraph.NewConnector(directoryOnly, cfg, logger, nil)
-
-	// DiscardSink: records what would have been written without contacting
-	// OpenFGA. PR #19 swaps this for the real OpenFGASink (and installs the
-	// FGA invariant guard on its transport).
-	sink := aclsync.NewDiscardSink(logger)
-	syncer := aclsync.NewSyncer(connector, sink, logger)
-
-	service := aclsync.NewService(connector, syncer, aclsync.Config{
-		Mode:     aclsync.ModeOnce,
-		TenantID: cfg.TenantID,
-	}, logger, nil)
+	db, err := sql.Open("pgx", dbURL(os.Getenv))
+	if err != nil {
+		logger.Error("postgres open failed", "err", err.Error())
+		os.Exit(4)
+	}
+	defer func() { _ = db.Close() }()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := service.RunOnce(ctx); err != nil {
-		// Authentication failures are reported as ErrAuthFailed and propagated
-		// (no destructive delete; tested in TestGraphAuthFailureDoesNotDeleteTuples).
+	if err := db.PingContext(ctx); err != nil {
+		logger.Error("postgres ping failed (is db-migrate up-to-date?)", "err", err.Error())
+		os.Exit(4)
+	}
+
+	graphClient := msgraph.NewHTTPGraphClient(cfg)
+	connector := msgraph.NewConnector(graphClient, cfg, logger, nil)
+	catalog := msgraph.NewPostgresCatalogWriter(db)
+
+	stats, err := connector.EnumerateDirectory(ctx, cfg.TenantID, catalog)
+	if err != nil {
 		switch {
 		case errors.Is(err, msgraph.ErrAuthFailed):
 			logger.Error("microsoft graph authentication failed", "tenant", cfg.TenantID)
 		default:
-			logger.Error("connector run failed", "tenant", cfg.TenantID, "err", err.Error())
+			logger.Error("directory enumeration failed", "tenant", cfg.TenantID, "err", err.Error())
 		}
 		os.Exit(3)
 	}
 
-	// Smoke gate: print tenant info (stdout for human-facing summary).
-	fmt.Printf("msgraph-connector OK\n  tenant_id: %s\n  mode: directory-only (PR #18 scaffold)\n  tuples_observed: %d (recorded by DiscardSink; no OpenFGA writes)\n",
-		cfg.TenantID, sink.WrittenCount())
+	// Report totals from the catalog (post-upsert) plus the stats from this
+	// run. On a re-run, observed counts may equal the run stats while catalog
+	// totals stay flat — that's the idempotency property.
+	pTotal, _ := catalog.PrincipalCount(ctx, cfg.TenantID)
+	gTotal, _ := catalog.GroupCount(ctx, cfg.TenantID)
+	mTotal, _ := catalog.MembershipCount(ctx, cfg.TenantID)
+
+	fmt.Printf(
+		"msgraph-connector OK\n"+
+			"  tenant_id:           %s\n"+
+			"  principals (total):  %d  (this run observed %d)\n"+
+			"  groups (total):      %d  (this run observed %d)\n"+
+			"  memberships (total): %d  (this run observed %d)\n"+
+			"  mode:                directory enumeration (PR #19; no OpenFGA, no SharePoint)\n",
+		cfg.TenantID,
+		pTotal, stats.PrincipalsUpserted,
+		gTotal, stats.GroupsUpserted,
+		mTotal, stats.MembershipsUpserted,
+	)
 }

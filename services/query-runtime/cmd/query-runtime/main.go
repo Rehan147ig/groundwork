@@ -65,7 +65,7 @@ func main() {
 	// Postgres writer's own per-write deadline, so the configured timeout is actually honored
 	// (the writer no longer caps it at a hardcoded 30ms).
 	auditWrite := envDuration("AUDIT_TIMEOUT_MS", auditTimeoutDefault(cfg.DatabaseURL))
-	auditor, closeAudit, err := buildAuditWriter(cfg.DatabaseURL, backend, auditWrite)
+	auditor, auditDB, closeAudit, err := buildAuditWriter(cfg.DatabaseURL, backend, auditWrite)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -136,6 +136,27 @@ func main() {
 	server.SetIdentity(identityVerifier, allowDemoIdentity)
 	server.SetCanonicalIdentity(resolver, canonicalIdentity)
 	server.SetRateLimiter(rateLimiter)
+	// PR #22: wire the read-side Audit API. Off when there's no
+	// Postgres (local in-memory mode) — the /v1/audit* endpoints
+	// return 503 audit_unavailable in that case, which is the right
+	// behavior since the in-memory trace store doesn't hold the
+	// hash-chained ledger the read API exposes.
+	if auditDB != nil {
+		server.SetAuditReader(engine.NewPostgresAuditReader(auditDB))
+		// PR #22 HA fix #3: register a Postgres reachability probe
+		// with /readyz so an unreachable DB takes the pod out of
+		// rotation. The Pinger context budget is short (1s) — a slow
+		// DB is functionally as bad as a dead DB for the query path
+		// (audit-write fail-closed) and we want k8s to know quickly.
+		server.AddReadinessProbe(runtime.ReadinessProbe{
+			Name: "postgres",
+			Check: func(ctx context.Context) error {
+				pingCtx, cancel := context.WithTimeout(ctx, time.Second)
+				defer cancel()
+				return auditDB.PingContext(pingCtx)
+			},
+		})
+	}
 
 	mcpHTTP := mcp.NewHTTPServer(core, apiKeys, identityVerifier, allowDemoIdentity)
 	mcpHTTP.SetCanonicalIdentity(resolver, canonicalIdentity)
@@ -195,19 +216,23 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 
 // buildAuditWriter selects the audit sink: the immutable Postgres ledger when
 // DATABASE_URL is set, otherwise the in-memory trace store for local/dev.
-func buildAuditWriter(databaseURL string, backend runtime.Backend, timeout time.Duration) (engine.AuditWriter, func(), error) {
+// Also returns the underlying *sql.DB (or nil for the in-memory case) so the
+// caller can construct an audit READER from the same handle — PR #22 wires
+// engine.PostgresAuditReader for /v1/audit* against this DB.
+func buildAuditWriter(databaseURL string, backend runtime.Backend, timeout time.Duration) (engine.AuditWriter, *sql.DB, func(), error) {
 	if databaseURL == "" {
-		return engine.RuntimeTraceAuditWriter{Trace: backend.Trace}, func() {}, nil
+		return engine.RuntimeTraceAuditWriter{Trace: backend.Trace}, nil, func() {}, nil
 	}
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
-		return nil, func() {}, err
+		return nil, nil, func() {}, err
 	}
+	tuneAuditPool(db)
 	// Honor the configured AUDIT_TIMEOUT_MS for the per-write deadline. The bare
 	// NewPostgresAuditWriter hardcodes a 30ms budget that is too tight for a real Postgres
 	// round-trip (advisory lock + select + insert) and would fail audit writes — and thus
 	// fail queries closed — under load or on a cold connection.
-	return engine.NewPostgresAuditWriterWithTimeout(db, timeout), func() { _ = db.Close() }, nil
+	return engine.NewPostgresAuditWriterWithTimeout(db, timeout), db, func() { _ = db.Close() }, nil
 }
 
 // buildPrincipalResolver constructs the canonical principal resolver: the Postgres-backed
@@ -223,7 +248,42 @@ func buildPrincipalResolver(databaseURL string, ttl time.Duration) (runtime.Prin
 	if err != nil {
 		return nil, func() {}, err
 	}
+	tunePrincipalPool(db)
 	return runtime.NewCachingResolver(runtime.NewPostgresPrincipalResolver(db), ttl), func() { _ = db.Close() }, nil
+}
+
+// tuneAuditPool sets explicit pool limits on the audit-write *sql.DB.
+// Defaults from database/sql are unsafe under load: MaxOpenConns=0
+// (unbounded — under DB-slow conditions, every concurrent Engine.Execute
+// goroutine spawns a new connection and the DB falls over from sheer
+// connection count), MaxIdleConns=2 (steady-state traffic constantly
+// thrashes connections). The bounded values below are conservative:
+//
+//	MaxOpenConns      25  — covers ~250 qps per pod at 100ms per audit
+//	                       write; tune up if the pod is sized higher
+//	MaxIdleConns       5  — keeps the steady-state path warm without
+//	                       hoarding idle connections
+//	ConnMaxLifetime   1h  — recycle stale connections (load balancer
+//	                       and pgbouncer-style proxies can stale them)
+//	ConnMaxIdleTime  5m   — return long-idle conns to the pool
+//
+// Env-tunable via GROUNDWORK_AUDIT_POOL_{MAX,IDLE,LIFETIME_MS,IDLE_MS}
+// so operators can adjust without a rebuild. PR #22 HA review fix #1.
+func tuneAuditPool(db *sql.DB) {
+	db.SetMaxOpenConns(envInt("GROUNDWORK_AUDIT_POOL_MAX", 25))
+	db.SetMaxIdleConns(envInt("GROUNDWORK_AUDIT_POOL_IDLE", 5))
+	db.SetConnMaxLifetime(envDuration("GROUNDWORK_AUDIT_POOL_LIFETIME_MS", time.Hour))
+	db.SetConnMaxIdleTime(envDuration("GROUNDWORK_AUDIT_POOL_IDLE_MS", 5*time.Minute))
+}
+
+// tunePrincipalPool sets the same defaults on the canonical-principal
+// resolver DB. The resolver is read-mostly + cached, so a smaller cap
+// is fine, but uniform sizing makes the operational picture simpler.
+func tunePrincipalPool(db *sql.DB) {
+	db.SetMaxOpenConns(envInt("GROUNDWORK_PRINCIPAL_POOL_MAX", 10))
+	db.SetMaxIdleConns(envInt("GROUNDWORK_PRINCIPAL_POOL_IDLE", 2))
+	db.SetConnMaxLifetime(envDuration("GROUNDWORK_PRINCIPAL_POOL_LIFETIME_MS", time.Hour))
+	db.SetConnMaxIdleTime(envDuration("GROUNDWORK_PRINCIPAL_POOL_IDLE_MS", 5*time.Minute))
 }
 
 // auditTimeoutDefault gives the synchronous audit write a realistic budget: a tight

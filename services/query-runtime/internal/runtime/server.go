@@ -24,12 +24,54 @@ type Server struct {
 	resolver          PrincipalResolver
 	canonicalIdentity bool
 	limiter           *RateLimiter
+	// auditReader is the optional read-side implementation used by the
+	// PR #22 Audit Read API endpoints. Nil-safe: when unset, /v1/audit*
+	// returns 503 audit_unavailable. Wired via SetAuditReader from
+	// cmd/query-runtime — the engine package supplies a Postgres impl
+	// that internally reuses engine.LoadAuditChain / VerifyChain.
+	auditReader AuditReader
+
+	// readinessProbes is the optional set of dependency probes that
+	// /readyz invokes on every call. PR #22 HA fix #3: today /readyz
+	// only checks struct wiring, so a dead Postgres still reports 200
+	// and k8s keeps routing /v1/query traffic to a pod that will
+	// fail-closed on every request. Each probe returns nil on healthy,
+	// non-nil on unhealthy. Wired via AddReadinessProbe from
+	// cmd/query-runtime. Empty (the default for tests / local mode)
+	// preserves the original behavior — struct-wiring check only.
+	readinessProbes []ReadinessProbe
+}
+
+// ReadinessProbe is one /readyz dependency check. Implementations must
+// return quickly (probes run synchronously inside the readyz handler
+// with a short outer timeout); a probe that hangs blocks the entire
+// readyz response, which Kubernetes interprets as failure on
+// readinessProbe timeout. Name is rendered in the JSON response body
+// when the probe fails.
+type ReadinessProbe struct {
+	Name  string
+	Check func(ctx context.Context) error
 }
 
 // SetRateLimiter wires the per-API-key request/minute limiter. When set, authenticated
 // requests that exceed their key's rate_limit_rpm budget are rejected with 429. When unset
 // (nil), no limiting is applied — so local/demo and existing tests are unaffected.
 func (s *Server) SetRateLimiter(rl *RateLimiter) { s.limiter = rl }
+
+// AddReadinessProbe registers one dependency probe with /readyz. Probes
+// are invoked sequentially on every readyz request with a short outer
+// timeout; the first failure short-circuits and returns 503. PR #22 HA
+// fix #3. Callers typically register a Postgres ping ("postgres") and
+// OpenFGA reachability ("openfga"); the actual probes live in
+// cmd/query-runtime where the *sql.DB and OpenFGAChecker handles are
+// available. Order matters only insofar as the first failing probe is
+// reported as the reason.
+func (s *Server) AddReadinessProbe(p ReadinessProbe) {
+	if p.Check == nil {
+		return
+	}
+	s.readinessProbes = append(s.readinessProbes, p)
+}
 
 // SetIdentity wires the end-user identity verifier and the demo-identity switch.
 // When allowDemo is false and no valid assertion is present, /v1/query fails closed.
@@ -78,6 +120,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/admin/api-keys", s.requireAPIKey("admin", s.createAPIKey))
 	mux.HandleFunc("POST /v1/admin/api-keys/{id}/rotate", s.requireAPIKey("admin", s.rotateAPIKey))
 	mux.HandleFunc("DELETE /v1/admin/api-keys/{id}", s.requireAPIKey("admin", s.revokeAPIKey))
+	// PR #22: Audit Read API. Read-only. Requires the new "audit" scope
+	// (admin scope inherits via hasScope's existing override). All four
+	// endpoints honor the tenant_id from the API-key context only —
+	// never from the URL or body. /audit/verify is intentionally
+	// unauthenticated WITH the audit scope; chain verification is a
+	// SOC-2 observable surface for tenants who hold an audit-only key.
+	mux.HandleFunc("GET /v1/audit", s.requireAPIKey(auditScope, s.auditList))
+	mux.HandleFunc("GET /v1/audit/stats", s.requireAPIKey(auditScope, s.auditStats))
+	mux.HandleFunc("GET /v1/audit/verify", s.requireAPIKey(auditScope, s.auditVerify))
+	mux.HandleFunc("GET /v1/audit/{trace_id}", s.requireAPIKey(auditScope, s.auditGet))
 	return mux
 }
 
@@ -89,7 +141,7 @@ func (s *Server) livez(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "alive"})
 }
 
-func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	if s.apiKeys == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "api_key_resolver_unavailable"})
 		return
@@ -97,6 +149,26 @@ func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
 	if s.executor == nil && (s.backend.Vector == nil || s.backend.ACL == nil || s.backend.Trace == nil) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "runtime_backend_unavailable"})
 		return
+	}
+	// PR #22 HA fix #3: probe registered dependencies (Postgres,
+	// OpenFGA) on every call. A dead dependency removes this pod from
+	// the LB via k8s readiness; other pods continue to serve. Total
+	// probe budget is bounded so a slow probe doesn't extend the readyz
+	// response indefinitely (k8s would interpret a hung readyz as
+	// failure on readinessProbe.timeoutSeconds anyway).
+	if len(s.readinessProbes) > 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		for _, probe := range s.readinessProbes {
+			if err := probe.Check(ctx); err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"status": "not_ready",
+					"reason": "dependency_unhealthy",
+					"probe":  probe.Name,
+				})
+				return
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
@@ -114,6 +186,13 @@ func (s *Server) query(w http.ResponseWriter, r *http.Request) {
 	}
 	req.TenantID = tenant.TenantID
 	req.Region = tenant.Region
+	// PR #21: stamp the verified API key identity onto the request
+	// so the audit row carries both the stable FK (KeyID) and the
+	// display snapshot (KeyName). Sourced from the TenantContext,
+	// never from the body — QueryRequest's json:"-" tags enforce
+	// that even if the fields are in the JSON body.
+	req.AgentKeyID = tenant.KeyID
+	req.AgentKeyName = tenant.KeyName
 
 	// Effective end-user identity: a verified assertion always wins and the
 	// body-supplied user_id is ignored. The body user_id is honored only in demo

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -24,6 +25,17 @@ func (m *mockExecutor) Execute(ctx context.Context, req QueryRequest) QueryRespo
 			UserID:   req.UserID,
 		},
 	}
+}
+
+// capturingExecutor records the QueryRequest it was called with so tests can
+// assert what server.query plumbed in (tenant, region, agent key id/name, etc.).
+type capturingExecutor struct {
+	last QueryRequest
+}
+
+func (c *capturingExecutor) Execute(ctx context.Context, req QueryRequest) QueryResponse {
+	c.last = req
+	return QueryResponse{Answer: "ok", Trace: RuntimeTrace{TenantID: req.TenantID, UserID: req.UserID}}
 }
 
 func newTestServer(cfg Config) *Server {
@@ -366,5 +378,129 @@ func TestQueryDemoModeAllowsBodyUserID(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"user_id":"demo_user"`) {
 		t.Fatalf("demo mode should use the body user_id, got %s", rec.Body.String())
+	}
+}
+
+// TestQueryStampsAgentKeyFromAPIKey verifies that the PR #21 agent
+// attribution plumbing works: both the stable KeyID and the display
+// KeyName are set on QueryRequest BEFORE the executor sees it, and
+// neither can be set from the request body. Both land on the audit row
+// downstream (engine.auditEntryFromTrace copies them onto
+// AuditEntry.AgentKeyID / AgentKeyName).
+func TestQueryStampsAgentKeyFromAPIKey(t *testing.T) {
+	backend := NewMemoryBackend()
+	apiKeys := NewMemoryAPIKeyResolver("gw_test_key", TenantContext{
+		TenantID: "tenant_demo", Region: "uk", KeyName: "treasury-agent",
+	})
+	captor := &capturingExecutor{}
+	server := NewServerWithExecutor(Config{}, backend, apiKeys, captor)
+	server.allowDemoIdentity = true
+
+	// Attempt to inject forged agent attribution via the request body —
+	// both fields are json:"-" and must be ignored.
+	body := `{"user_id":"user_1","question":"test","AgentKeyID":9999,"AgentKeyName":"forged"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("X-Groundwork-API-Key", "gw_test_key")
+	rec := httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// MemoryAPIKeyResolver assigns KeyID = 1 to the bootstrap key.
+	if captor.last.AgentKeyID != 1 {
+		t.Fatalf("AgentKeyID must come from TenantContext.KeyID (stable api_keys.id), got %d", captor.last.AgentKeyID)
+	}
+	if captor.last.AgentKeyName != "treasury-agent" {
+		t.Fatalf("AgentKeyName must come from TenantContext.KeyName, got %q", captor.last.AgentKeyName)
+	}
+}
+
+// TestReadyz_NoProbes_ReturnsReady pins the backward-compat behavior:
+// when no readiness probes are registered, /readyz works as before
+// (struct-wiring check only). PR #22 HA fix #3.
+func TestReadyz_NoProbes_ReturnsReady(t *testing.T) {
+	s := newTestServer(Config{})
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with no probes, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestReadyz_HealthyProbe_ReturnsReady verifies that a probe returning
+// nil keeps readyz green.
+func TestReadyz_HealthyProbe_ReturnsReady(t *testing.T) {
+	s := newTestServer(Config{})
+	s.AddReadinessProbe(ReadinessProbe{
+		Name:  "postgres",
+		Check: func(context.Context) error { return nil },
+	})
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with healthy probe, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestReadyz_FailingProbe_Returns503 verifies that a failing dep probe
+// removes the pod from k8s rotation via 503. This is the HA win: today
+// a dead Postgres still reports 200 from this endpoint and the LB
+// keeps sending queries that all fail-closed. After this change the
+// pod is correctly de-rotated.
+func TestReadyz_FailingProbe_Returns503(t *testing.T) {
+	s := newTestServer(Config{})
+	s.AddReadinessProbe(ReadinessProbe{
+		Name:  "postgres",
+		Check: func(context.Context) error { return errors.New("dial tcp: connection refused") },
+	})
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 with failing probe, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"probe":"postgres"`) {
+		t.Fatalf("expected probe name in body, got %s", rec.Body.String())
+	}
+	// Reason should be the structured code, not the raw DB error
+	// (no leakage of connection-string details to public readyz).
+	if !strings.Contains(rec.Body.String(), `"reason":"dependency_unhealthy"`) {
+		t.Fatalf("expected sanitized reason code, got %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "connection refused") {
+		t.Fatalf("raw error should NOT leak into readyz body: %s", rec.Body.String())
+	}
+}
+
+// TestReadyz_FirstFailingProbeIsReported pins that probes are run in
+// registration order and the first failure short-circuits.
+func TestReadyz_FirstFailingProbeIsReported(t *testing.T) {
+	s := newTestServer(Config{})
+	openFGAReached := false
+	s.AddReadinessProbe(ReadinessProbe{
+		Name:  "postgres",
+		Check: func(context.Context) error { return errors.New("pg down") },
+	})
+	s.AddReadinessProbe(ReadinessProbe{
+		Name: "openfga",
+		Check: func(context.Context) error {
+			openFGAReached = true
+			return nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+	if openFGAReached {
+		t.Fatal("openfga probe should not be reached when postgres probe fails first")
+	}
+	if !strings.Contains(rec.Body.String(), `"probe":"postgres"`) {
+		t.Fatalf("expected postgres probe to be reported, got %s", rec.Body.String())
 	}
 }

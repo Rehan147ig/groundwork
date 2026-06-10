@@ -30,6 +30,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -82,6 +83,12 @@ func main() {
 	corpusDir := flag.String("corpus", "./examples/bank-demo/corpus", "corpus root directory")
 	personasFile := flag.String("personas", "./examples/bank-demo/personas/personas.json", "personas.json path")
 	embeddingURL := flag.String("embedding", "http://localhost:8090", "embedding service base URL (the SAME one the runtime uses; the dev compose maps ingestion to host port 8090)")
+	// PR #21: optional Postgres connection for populating the demo
+	// schema (demo.documents + demo.document_permissions). When empty,
+	// the seeder skips this step — useful for local Qdrant+OpenFGA-only
+	// smoke tests. The Codespace/docker-compose flow sets this to the
+	// same DATABASE_URL the runtime uses.
+	postgresURL := flag.String("postgres", "", "Postgres URL for demo schema seeding (demo.documents + demo.document_permissions); empty disables")
 	flag.Parse()
 
 	graph, err := readPersonaGraph(*personasFile)
@@ -158,7 +165,49 @@ func main() {
 	}
 	log.Printf("OpenFGA: %d tuples written to store %s", len(tuples), storeID)
 
+	// 4. (PR #21) Demo schema: documents + permissions for the Leak Report.
+	// Optional — skipped when -postgres is empty so local Qdrant+OpenFGA
+	// smoke tests stay fast. The Codespace flow always passes -postgres.
+	if *postgresURL != "" {
+		db, err := sql.Open("pgx", *postgresURL)
+		if err != nil {
+			log.Fatalf("open postgres %s: %v", redactURL(*postgresURL), err)
+		}
+		defer db.Close()
+		// Surface connectivity problems early — Open is lazy.
+		pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := db.PingContext(pingCtx); err != nil {
+			cancel()
+			log.Fatalf("ping postgres %s: %v (is migration 012 applied? run db-migrate first)", redactURL(*postgresURL), err)
+		}
+		cancel()
+		seedCtx, seedCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		if err := seedDemoCorpus(seedCtx, db, graph, *corpusDir); err != nil {
+			seedCancel()
+			log.Fatalf("seed demo corpus: %v", err)
+		}
+		seedCancel()
+		log.Printf("demo schema: %d documents + permissions written to demo.documents/demo.document_permissions", len(graph.Documents))
+	} else {
+		log.Printf("demo schema: -postgres not set; skipping demo.documents seeding (Leak Report won't have data)")
+	}
+
 	log.Println("done. demo stack ready.")
+}
+
+// redactURL strips the password component of a Postgres URL for safe
+// logging. The format is "postgres://user:password@host:port/db?...";
+// we replace ":password@" with ":***@".
+func redactURL(u string) string {
+	at := strings.LastIndex(u, "@")
+	if at < 0 {
+		return u
+	}
+	colon := strings.LastIndex(u[:at], ":")
+	if colon < 0 || colon < strings.Index(u, "://") {
+		return u
+	}
+	return u[:colon+1] + "***" + u[at:]
 }
 
 // ---------- persona graph ----------

@@ -1,0 +1,16 @@
+{
+  "name": "Groundwork",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/go:1": { "version": "1.23" }
+  },
+  "forwardPorts": [8080, 3000],
+  "portsAttributes": {
+    "8080": { "label": "Groundwork runtime (/v1/query, /mcp)" },
+    "3000": { "label": "CISO console" }
+  },
+  "hostRequirements": { "cpus": 4, "memory": "16gb", "storage": "32gb" },
+  "postStartCommand": "sudo sysctl -w vm.max_map_count=262144 || true",
+  "postCreateCommand": "echo 'Groundwork Codespace ready. Set OPENFGA_DATASTORE_URI, then follow docs/deploy-codespaces.md'"
+}

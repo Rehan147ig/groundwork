@@ -1,0 +1,47 @@
+# OpenFGA → Supabase (Postgres) datastore override.
+#
+# WHY: the prod profile runs OpenFGA with OPENFGA_DATASTORE_ENGINE=memory, which loses
+# every permission tuple on restart (after a reboot OpenFGA is empty and the runtime
+# fail-closes everyone to zero documents). This override switches OpenFGA to the Postgres
+# datastore backed by your Supabase project, so permissions survive restarts.
+#
+# USAGE — layer this on top of the prod profile:
+#
+#   export OPENFGA_DATASTORE_URI="postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require"
+#   docker compose -f infra/docker-compose.prod.yml -f infra/docker-compose.supabase.yml up
+#
+# The openfga-migrate service below creates OpenFGA's tables in Supabase on first `up`
+# and then exits; the openfga service waits for it to finish before starting.
+#
+# SUPABASE CONNECTION NOTES (these matter — wrong choice fails silently):
+#   * Use the SESSION pooler (port 5432) or the DIRECT connection — NOT the TRANSACTION
+#     pooler (port 6543). OpenFGA needs a session-mode connection.
+#   * Always include ?sslmode=require — Supabase requires TLS.
+#   * Keep OPENFGA_DATASTORE_URI in a secret / env var. Never commit it.
+
+services:
+  # One-shot schema migration: creates/updates OpenFGA's tables in Supabase, then exits.
+  openfga-migrate:
+    image: openfga/openfga:latest
+    command: ["migrate"]
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: ${OPENFGA_DATASTORE_URI:?set OPENFGA_DATASTORE_URI to your Supabase session-pooler URI with sslmode=require}
+    networks:
+      - groundwork
+    restart: "no"
+
+  openfga:
+    image: openfga/openfga:latest
+    command: ["run", "--http-addr", "0.0.0.0:8080", "--grpc-addr", "0.0.0.0:8081", "--playground-enabled=false"]
+    expose:
+      - "8080"
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: ${OPENFGA_DATASTORE_URI:?set OPENFGA_DATASTORE_URI to your Supabase session-pooler URI with sslmode=require}
+      OPENFGA_LOG_FORMAT: json
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+    networks:
+      - groundwork

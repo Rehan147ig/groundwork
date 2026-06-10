@@ -52,6 +52,8 @@ services:
       # Exposes REST (/v1/query, /health, /metrics) AND Cloud MCP (POST /mcp).
       - "8080:8080"
     depends_on:
+      db-migrate:
+        condition: service_completed_successfully
       qdrant:
         condition: service_started
       elasticsearch:
@@ -104,6 +106,25 @@ services:
       start_period: 20s
     volumes:
       - postgres-data:/var/lib/postgresql/data
+
+  # Auto-applies the SQL migrations in /migrations BEFORE the query-runtime starts.
+  # This fixes the silent fail-closed bug where, on a fresh database, query-runtime
+  # started without the `audit_log` table, every audit write errored, and the engine
+  # (correctly) fail-closed to zero documents on every query. With this step in the
+  # compose graph, the schema is always present by the time the runtime queries it.
+  # The image is idempotent — re-running on an already-migrated DB is a no-op.
+  db-migrate:
+    image: migrate/migrate:v4.18.1
+    volumes:
+      - ../migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://groundwork:groundwork@postgres:5432/groundwork?sslmode=disable"
+      - "up"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   qdrant:
     image: qdrant/qdrant:latest

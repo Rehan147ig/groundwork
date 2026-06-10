@@ -15,8 +15,16 @@ export type QueryRequest = {
   idk_threshold?: number;
 };
 
-export type ConsoleQueryRequest = QueryRequest & {
-  api_key: string;
+// The console -> proxy request. Either `persona` (preferred — drives JWT minting) or
+// `user_id` (legacy / live-acl-test) identifies the end user. `api_key` is optional;
+// when omitted the proxy falls back to the GROUNDWORK_API_KEY env var.
+export type ConsoleQueryRequest = {
+  persona?: string;
+  user_id?: string;
+  question: string;
+  api_key?: string;
+  source_scopes?: string[];
+  idk_threshold?: number;
 };
 
 export type Citation = {
@@ -62,23 +70,35 @@ export type QueryResponse = {
   confidence: number;
   citations: Citation[];
   trace: RuntimeTrace;
+  // Added by the console proxy (not part of the runtime contract): which identity path
+  // the proxy used. "verified" = signed JWT assertion; "demo" = body user_id fallback.
+  identity_mode?: "verified" | "demo";
 };
 
-export function validateQueryRequest(payload: unknown): payload is QueryRequest {
-  if (!payload || typeof payload !== "object") return false;
-  const value = payload as Partial<QueryRequest>;
-  return (
-    typeof value.user_id === "string" &&
-    value.user_id.length > 0 &&
-    typeof value.question === "string" &&
-    value.question.length >= 3 &&
-    (value.source_scopes === undefined || (Array.isArray(value.source_scopes) && value.source_scopes.every((scope) => typeof scope === "string"))) &&
-    (value.idk_threshold === undefined || (typeof value.idk_threshold === "number" && value.idk_threshold >= 0 && value.idk_threshold <= 1))
-  );
+const SHADOW_DECISION_MODE = "engine_shadow_observe";
+const ENFORCE_DECISION_MODE = "engine_live_acl_fail_closed";
+
+export function isShadowMode(trace: Pick<RuntimeTrace, "decision_mode">): boolean {
+  return trace.decision_mode === SHADOW_DECISION_MODE;
+}
+
+export function isEnforcing(trace: Pick<RuntimeTrace, "decision_mode">): boolean {
+  return trace.decision_mode === ENFORCE_DECISION_MODE;
 }
 
 export function validateConsoleQueryRequest(payload: unknown): payload is ConsoleQueryRequest {
   if (!payload || typeof payload !== "object") return false;
   const value = payload as Partial<ConsoleQueryRequest>;
-  return typeof value.api_key === "string" && value.api_key.length > 0 && validateQueryRequest(value);
+  const hasSubject =
+    (typeof value.persona === "string" && value.persona.length > 0) ||
+    (typeof value.user_id === "string" && value.user_id.length > 0);
+  return (
+    hasSubject &&
+    typeof value.question === "string" &&
+    value.question.length >= 3 &&
+    (value.source_scopes === undefined ||
+      (Array.isArray(value.source_scopes) && value.source_scopes.every((scope) => typeof scope === "string"))) &&
+    (value.idk_threshold === undefined ||
+      (typeof value.idk_threshold === "number" && value.idk_threshold >= 0 && value.idk_threshold <= 1))
+  );
 }

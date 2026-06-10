@@ -30,6 +30,23 @@ type QueryRequest struct {
 	Question     string   `json:"question"`
 	SourceScopes []string `json:"source_scopes,omitempty"`
 	IDKThreshold float64  `json:"idk_threshold,omitempty"`
+
+	// AgentKeyID is the STABLE foreign-key identity of the API key that
+	// authenticated the call (sourced from TenantContext.KeyID =
+	// api_keys.id by server.query before dispatching to the executor).
+	// Used as the group-by key for the Dashboard L2 agent panel. Never
+	// accepted from the request body (json:"-") so a client cannot
+	// claim to be a different agent. Zero when no key context is
+	// available (embedded use).
+	AgentKeyID int64 `json:"-"`
+
+	// AgentKeyName is the DISPLAY snapshot of the API key's name
+	// (TenantContext.KeyName = api_keys.name) at request time. Set
+	// alongside AgentKeyID by server.query. Audit-row write time
+	// snapshot — historical rows preserve the name as it was when
+	// the call landed, even if the key is renamed later. PR #21
+	// plumbs both onto the audit row for Audit Read API + Dashboard.
+	AgentKeyName string `json:"-"`
 }
 
 type CreateAPIKeyRequest struct {

@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Groundwork — System Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f7f8f9; --surface2:#eef1f4;
+    --ink:#0a0b0d; --ink2:#2a2f37; --muted:#5c636e;
+    --line:#e2e5ea; --line2:#cfd4dc;
+    --gw:#0d6b34; --gw-bright:#16a34a; --gw-soft:#e7f6ec; --gw-line:#a7e0bc;
+    --slate:#475569; --slate-soft:#eef1f5; --slate-line:#d4dae2;
+    --amber:#b45309; --amber-soft:#fdf0db; --amber-line:#f0d49a;
+    --blue:#1d4ed8;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;font-size:15px;line-height:1.55;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+  .page{max-width:1180px;margin:0 auto;padding:52px 6% 90px;}
+
+  /* masthead */
+  .masthead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;
+    border-bottom:2px solid var(--ink);padding-bottom:16px;margin-bottom:34px;}
+  .brand{display:flex;align-items:center;gap:11px;font-family:'IBM Plex Mono',monospace;
+    font-weight:600;font-size:13px;letter-spacing:.08em;text-transform:uppercase;}
+  .brand .mark{width:14px;height:14px;background:var(--gw-bright);display:inline-block;}
+  .mast-meta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);
+    letter-spacing:.05em;text-transform:uppercase;text-align:right;}
+  .mast-meta strong{display:block;color:var(--ink);font-weight:600;margin-bottom:2px;}
+
+  h1{font-family:'IBM Plex Serif',Georgia,serif;font-size:40px;line-height:1.12;font-weight:600;
+    letter-spacing:-.015em;margin:0 0 14px;max-width:24ch;}
+  .lede{font-size:17px;color:var(--ink2);max-width:70ch;margin:0 0 28px;}
+
+  /* legend */
+  .legend{display:flex;flex-wrap:wrap;gap:18px;padding:14px 18px;background:var(--surface);
+    border-radius:8px;margin-bottom:54px;font-size:12px;font-family:'IBM Plex Mono',monospace;
+    letter-spacing:.03em;}
+  .legend span{display:inline-flex;align-items:center;gap:7px;color:var(--ink2);}
+  .swatch{width:13px;height:13px;border-radius:3px;display:inline-block;}
+  .swatch.gw{background:var(--gw-bright);}
+  .swatch.slate{background:var(--slate);}
+  .swatch.amber{background:var(--amber);}
+
+  /* section heads */
+  section{margin-bottom:64px;}
+  .shead{border-top:1px solid var(--ink);padding-top:16px;margin-bottom:8px;
+    display:flex;align-items:baseline;justify-content:space-between;gap:20px;}
+  .snum{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;
+    color:var(--muted);text-transform:uppercase;font-weight:600;}
+  h2{font-family:'IBM Plex Serif',Georgia,serif;font-size:25px;font-weight:600;
+    letter-spacing:-.01em;margin:0;}
+  .sintro{font-size:15px;color:var(--muted);max-width:74ch;margin:0 0 26px;}
+
+  /* generic diagram bits */
+  .band{border-radius:10px;padding:16px 18px;border:1px solid var(--line);background:var(--bg);}
+  .band-label{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;
+    text-transform:uppercase;font-weight:600;color:var(--muted);margin-bottom:10px;}
+  .nodes{display:flex;flex-wrap:wrap;gap:10px;}
+  .node{flex:1 1 0;min-width:120px;border:1px solid var(--slate-line);background:var(--slate-soft);
+    border-radius:8px;padding:12px 14px;text-align:center;}
+  .node .t{font-weight:700;font-size:13px;color:var(--ink);}
+  .node .s{font-size:11px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;}
+
+  .arrow{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    color:var(--gw);padding:9px 0;}
+  .arrow .gly{font-size:17px;line-height:1;}
+  .arrow .lbl{font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.05em;
+    color:var(--muted);text-transform:uppercase;margin-top:5px;}
+
+  /* groundwork seam band */
+  .gw-band{background:var(--gw);color:#fff;border-radius:10px;padding:20px 22px;position:relative;
+    border:1px solid var(--gw);box-shadow:0 14px 36px rgba(13,107,52,.18);}
+  .gw-band .seamtag{position:absolute;top:-11px;left:18px;background:var(--gw-bright);color:#fff;
+    font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.14em;padding:3px 9px;
+    border-radius:3px;text-transform:uppercase;}
+  .gw-band .gw-row{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;}
+  .gw-band h3{font-family:'IBM Plex Serif',serif;font-size:22px;margin:0 0 4px;font-weight:600;}
+  .gw-band .gw-sub{font-size:12.5px;color:#c9ecd5;font-family:'IBM Plex Mono',monospace;letter-spacing:.02em;}
+  .gw-stores{display:flex;gap:8px;flex-wrap:wrap;}
+  .store{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:6px;
+    padding:7px 11px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#eafff0;white-space:nowrap;}
+  .store b{color:#fff;font-weight:600;}
+
+  /* node grid for connectors */
+  .conn-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .conn{border:1px solid var(--slate-line);background:var(--bg);border-radius:8px;padding:13px;}
+  .conn .ct{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--gw);font-weight:600;margin-bottom:6px;}
+  .conn .cn{font-size:13px;font-weight:700;}
+  .conn .cs{font-size:11px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;}
+
+  .sor{background:var(--surface2);border:1px dashed var(--line2);border-radius:10px;
+    padding:14px 18px;text-align:center;}
+  .sor .t{font-weight:700;font-size:13px;}
+  .sor .s{font-size:11.5px;color:var(--muted);margin-top:3px;}
+
+  /* request flow (horizontal) */
+  .flow{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap;overflow-x:auto;padding-bottom:6px;}
+  .fstep{flex:0 0 auto;min-width:96px;max-width:150px;border:1px solid var(--line);border-radius:8px;
+    padding:12px;background:var(--bg);text-align:center;display:flex;flex-direction:column;gap:4px;}
+  .fstep.user{background:var(--slate-soft);border-color:var(--slate-line);}
+  .fstep .fn{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);}
+  .fstep .ft{font-weight:700;font-size:12.5px;}
+  .fsep{flex:0 0 auto;display:flex;align-items:center;color:var(--gw);font-size:16px;padding:0 7px;}
+  .gw-pipeline{flex:0 0 auto;border:2px solid var(--gw);border-radius:10px;background:var(--gw-soft);
+    padding:14px;display:flex;flex-direction:column;gap:9px;min-width:430px;}
+  .gw-pipeline .pl-head{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .gw-pipeline .pl-head .nm{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--gw);font-weight:600;}
+  .gw-pipeline .pl-head .fc{font-size:10.5px;color:var(--amber);font-weight:700;font-family:'IBM Plex Mono',monospace;}
+  .psteps{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;}
+  .pstep{background:var(--bg);border:1px solid var(--gw-line);border-radius:6px;padding:8px 9px;}
+  .pstep .pi{font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:var(--gw-bright);font-weight:600;}
+  .pstep .pt{font-size:11.5px;font-weight:600;line-height:1.3;margin-top:2px;}
+
+  /* two-sided governance */
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+  .side{border:1px solid var(--line);border-radius:10px;padding:20px;}
+  .side.read{border-top:3px solid var(--gw-bright);}
+  .side.act{border-top:3px solid var(--amber);background:#fffdfa;}
+  .side h3{font-family:'IBM Plex Serif',serif;font-size:18px;margin:0 0 3px;}
+  .side .q{font-size:13px;color:var(--muted);font-style:italic;margin:0 0 14px;}
+  .badge{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;
+    text-transform:uppercase;font-weight:600;padding:3px 8px;border-radius:100px;margin-bottom:12px;}
+  .badge.built{background:var(--gw-soft);color:var(--gw);}
+  .badge.next{background:var(--amber-soft);color:var(--amber);}
+  .roles{display:grid;gap:8px;margin:6px 0 14px;}
+  .role{display:flex;gap:10px;align-items:flex-start;font-size:13px;}
+  .role .rk{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap;margin-top:1px;}
+  .rk.yes{background:var(--gw-soft);color:var(--gw);}
+  .rk.v2{background:var(--amber-soft);color:var(--amber);}
+  .rk.no{background:#fbe4e4;color:#b91c1c;}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}
+  .chip{font-family:'IBM Plex Mono',monospace;font-size:11px;background:var(--surface);
+    border:1px solid var(--line);border-radius:100px;padding:5px 10px;color:var(--ink2);}
+  .chip.hot{background:var(--amber-soft);border-color:var(--amber-line);color:var(--amber);font-weight:600;}
+  .eu-note{font-size:11.5px;color:var(--amber);margin-top:10px;font-family:'IBM Plex Mono',monospace;}
+  .same-engine{margin-top:18px;background:var(--gw);color:#fff;border-radius:8px;padding:13px 16px;
+    font-size:13px;}
+  .same-engine b{color:#bff0cf;}
+
+  /* engine vs pipe */
+  .engine-wrap{display:grid;grid-template-columns:1fr;gap:16px;}
+  .engine{border:2px solid var(--gw);background:var(--gw-soft);border-radius:10px;padding:18px 20px;}
+  .engine .et{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--gw);font-weight:600;margin-bottom:8px;}
+  .engine .ev{font-family:'IBM Plex Serif',serif;font-size:19px;font-weight:600;margin-bottom:6px;}
+  .engine .ed{font-size:13px;color:var(--ink2);}
+  .engine .ed b{color:var(--gw);}
+  .pipe-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;}
+  .pipe{background:var(--bg);border:1px solid var(--slate-line);border-radius:7px;padding:8px 12px;
+    font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--ink2);}
+  .packs{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:6px;}
+  .pack{border:1px solid var(--line);border-radius:9px;padding:16px;}
+  .pack.banking{border-top:3px solid var(--gw-bright);}
+  .pack.legal{border-top:3px solid #6d28d9;}
+  .pack.health{border-top:3px solid #0e7490;}
+  .pack h4{margin:0 0 4px;font-size:15px;font-family:'IBM Plex Serif',serif;}
+  .pack .pp{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;}
+  .pack ul{margin:0;padding-left:16px;font-size:12.5px;color:var(--ink2);}
+  .pack li{margin-bottom:3px;}
+  .pack .status{font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-top:10px;display:inline-block;}
+  .pack.banking .status{color:var(--gw);}
+  .pack.legal .status,.pack.health .status{color:var(--muted);}
+
+  .moat{margin-top:18px;border-left:3px solid var(--gw);background:var(--surface);padding:14px 18px;border-radius:0 8px 8px 0;font-size:14px;color:var(--ink2);}
+  .moat b{color:var(--ink);}
+
+  .footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);
+    display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;
+    font-size:11px;color:var(--muted);letter-spacing:.04em;}
+
+  @media(max-width:860px){
+    .conn-grid,.psteps,.packs{grid-template-columns:1fr 1fr;}
+    .two,.engine-wrap{grid-template-columns:1fr;}
+    h1{font-size:30px;}.page{padding:34px 5% 64px;}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="masthead">
+    <div class="brand"><span class="mark"></span><span>Groundwork &mdash; System Architecture</span></div>
+    <div class="mast-meta"><strong>Architecture Overview &middot; v1</strong>Confidential &middot; June 2026</div>
+  </div>
+
+  <h1>The authorization layer for enterprise AI.</h1>
+  <p class="lede">Groundwork sits at one seam &mdash; between the AI and the data &mdash; and enforces, at query time, that an agent only ever retrieves what the asking user is allowed to see, and only ever acts where the user is allowed to act. Fail-closed. Fully audited. Below is how the whole system fits together.</p>
+
+  <div class="legend">
+    <span><span class="swatch gw"></span> Groundwork &amp; its stores</span>
+    <span><span class="swatch slate"></span> Source systems (read-only, never owned)</span>
+    <span><span class="swatch amber"></span> Action / write side</span>
+  </div>
+
+  <!-- 01 WHERE GW SITS -->
+  <section>
+    <div class="shead"><span class="snum">01 &middot; Positioning</span><h2>Where Groundwork sits in the deep enterprise stack</h2></div>
+    <p class="sintro">One thin, horizontal seam. Groundwork reads from the entrenched systems through connectors &mdash; it never replaces them and never enters the system-of-record write path.</p>
+
+    <div class="band">
+      <div class="band-label">People</div>
+      <div class="nodes">
+        <div class="node"><div class="t">Bank employees</div><div class="s">teller · RM · compliance · auditor · exec</div></div>
+      </div>
+    </div>
+    <div class="arrow"><span class="gly">&#9660;</span></div>
+
+    <div class="band">
+      <div class="band-label">AI agent platforms — the consumers</div>
+      <div class="nodes">
+        <div class="node"><div class="t">Copilot Studio</div></div>
+        <div class="node"><div class="t">Agentforce</div></div>
+        <div class="node"><div class="t">Claude · MCP</div></div>
+        <div class="node"><div class="t">Vertex / Gemini</div></div>
+        <div class="node"><div class="t">Bedrock</div></div>
+      </div>
+    </div>
+    <div class="arrow"><span class="gly">&#9660;</span><span class="lbl">query + verified identity (JWT)</span></div>
+
+    <div class="gw-band">
+      <span class="seamtag">The seam you own</span>
+      <div class="gw-row">
+        <div>
+          <h3>Groundwork &mdash; runtime authorization layer</h3>
+          <div class="gw-sub">verify identity · gate every chunk · fail closed · tamper-evident audit</div>
+        </div>
+        <div class="gw-stores">
+          <div class="store"><b>Qdrant</b> · index</div>
+          <div class="store"><b>OpenFGA</b> · permissions</div>
+          <div class="store"><b>Postgres</b> · audit chain</div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow"><span class="gly">&#9660;</span><span class="lbl">reads from via connectors — never owns</span></div>
+
+    <div class="conn-grid">
+      <div class="conn"><div class="ct">Identity / IAM</div><div class="cn">Entra · Okta · Ping</div><div class="cs">who + groups → OpenFGA</div></div>
+      <div class="conn"><div class="ct">Document / KB</div><div class="cn">SharePoint · Confluence</div><div class="cs">documents → Qdrant</div></div>
+      <div class="conn"><div class="ct">Core banking</div><div class="cn">Temenos · FIS · Mambu</div><div class="cs">accounts · ownership</div></div>
+      <div class="conn"><div class="ct">Aggregators</div><div class="cn">Tink · Plaid</div><div class="cs">account ownership</div></div>
+    </div>
+    <div class="arrow"><span class="gly">&#9660;</span></div>
+
+    <div class="sor">
+      <div class="t">Systems of record</div>
+      <div class="s">decades old · mission-critical · Groundwork never touches the write path</div>
+    </div>
+  </section>
+
+  <!-- 02 REQUEST FLOW -->
+  <section>
+    <div class="shead"><span class="snum">02 &middot; Read path</span><h2>What happens on every query</h2></div>
+    <p class="sintro">The agent never talks to the data directly. It asks Groundwork, which verifies, retrieves, checks each chunk against the permission graph, records the decision, and returns only what is authorized.</p>
+
+    <div class="flow">
+      <div class="fstep user"><div class="fn">person</div><div class="ft">User</div></div>
+      <div class="fsep">&#9654;</div>
+      <div class="fstep"><div class="fn">consumer</div><div class="ft">AI Agent</div></div>
+      <div class="fsep">&#9654;</div>
+      <div class="gw-pipeline">
+        <div class="pl-head"><span class="nm">Groundwork runtime</span><span class="fc">uncertain → return zero</span></div>
+        <div class="psteps">
+          <div class="pstep"><div class="pi">01</div><div class="pt">Verify identity (JWT)</div></div>
+          <div class="pstep"><div class="pi">02</div><div class="pt">Retrieve candidates (Qdrant)</div></div>
+          <div class="pstep"><div class="pi">03</div><div class="pt">Check each chunk (OpenFGA)</div></div>
+          <div class="pstep"><div class="pi">04</div><div class="pt">Fail-closed filter</div></div>
+          <div class="pstep"><div class="pi">05</div><div class="pt">Record decision (hash chain)</div></div>
+          <div class="pstep"><div class="pi">06</div><div class="pt">Return only authorized</div></div>
+        </div>
+      </div>
+      <div class="fsep">&#9654;</div>
+      <div class="fstep"><div class="fn">authorized only</div><div class="ft">AI Agent</div></div>
+      <div class="fsep">&#9654;</div>
+      <div class="fstep user"><div class="fn">answer</div><div class="ft">User</div></div>
+    </div>
+  </section>
+
+  <!-- 03 TWO SIDED -->
+  <section>
+    <div class="shead"><span class="snum">03 &middot; Two-sided governance</span><h2>What the agent can see &mdash; and what it can do</h2></div>
+    <p class="sintro">Retrieval is only half of agent governance. The other half is actions. Groundwork governs both, on the same engine.</p>
+
+    <div class="two">
+      <div class="side read">
+        <span class="badge built">Built today</span>
+        <h3>Read side &mdash; retrieval</h3>
+        <p class="q">"Can this user SEE this document?"</p>
+        <p style="font-size:13.5px;color:var(--ink2);margin:0 0 12px;">Every candidate chunk is checked against the permission graph before it reaches the model. Unauthorized, stale, cross-tenant, or region-invalid chunks never enter the prompt.</p>
+        <div class="chips">
+          <span class="chip">credit memos</span><span class="chip">KYC packets</span>
+          <span class="chip">policy docs</span><span class="chip">board correspondence</span>
+          <span class="chip">audit findings</span>
+        </div>
+      </div>
+
+      <div class="side act">
+        <span class="badge next">The second act</span>
+        <h3>Action side &mdash; tools</h3>
+        <p class="q">"Can this user, via this agent, DO this?"</p>
+        <div class="roles">
+          <div class="role"><span class="rk yes">RECORD</span><span>Log every attempted &amp; executed action in the immutable ledger. <b>Do now.</b></span></div>
+          <div class="role"><span class="rk v2">AUTHORIZE</span><span>Pre-action allow/deny via the same engine. <b>v2.</b></span></div>
+          <div class="role"><span class="rk no">EXECUTE</span><span>Never. The core system executes &amp; does final enforcement.</span></div>
+        </div>
+        <div class="chips">
+          <span class="chip">payment / wire</span>
+          <span class="chip hot">credit-score update</span>
+          <span class="chip hot">loan approval</span>
+          <span class="chip">account freeze</span>
+          <span class="chip">access grant</span>
+          <span class="chip">data export</span>
+        </div>
+        <div class="eu-note">⚑ credit-score &amp; loan actions = EU AI Act Annex III §5(b) high-risk → mandatory logging + human oversight</div>
+      </div>
+    </div>
+
+    <div class="same-engine">
+      <b>Same engine.</b> OpenFGA models <code style="font-family:'IBM Plex Mono',monospace">user → can_approve → loan</code> exactly as it models <code style="font-family:'IBM Plex Mono',monospace">user → viewer → document</code>. The hash-chained audit ledger records an action decision exactly as it records a retrieval decision. Actions are an extension, not a rewrite.
+    </div>
+  </section>
+
+  <!-- 04 ENGINE VS PIPE -->
+  <section>
+    <div class="shead"><span class="snum">04 &middot; The moat</span><h2>One engine. Connectors per source-type. Packs per vertical.</h2></div>
+    <p class="sintro">The enforcement core is identical for every customer and is never forked. Integration is connectors behind one stable interface. Depth compounds into switching cost.</p>
+
+    <div class="engine-wrap">
+      <div class="engine">
+        <div class="et">The engine — universal, never forked</div>
+        <div class="ev">OpenFGA · fail-closed · hash-chained audit · verified identity · MCP</div>
+        <div class="ed">Identical for every bank, every vertical. <b>This never changes per customer.</b></div>
+      </div>
+
+      <div>
+        <div class="band-label" style="margin-bottom:8px;">The pipe — one connector per source-system type, reused by every customer on it</div>
+        <div class="pipe-row">
+          <span class="pipe">Temenos</span><span class="pipe">Microsoft Graph / Entra</span>
+          <span class="pipe">SharePoint</span><span class="pipe">Okta</span>
+          <span class="pipe">Fineract</span><span class="pipe">Open Bank Project</span>
+          <span class="pipe">+ next…</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="band-label" style="margin-bottom:10px;">Vertical packs — connector set + permission-model template (same engine underneath)</div>
+        <div class="packs">
+          <div class="pack banking">
+            <h4>Banking</h4>
+            <div class="pp">connectors + model</div>
+            <ul><li>need-to-know</li><li>RM ↔ client ownership</li><li>branch / region residency</li></ul>
+            <span class="status">● wedge — building now</span>
+          </div>
+          <div class="pack legal">
+            <h4>Legal</h4>
+            <div class="pp">connectors + model</div>
+            <ul><li>ethical walls / Chinese walls</li><li>matter-based access</li><li>conflict-of-interest screens</li></ul>
+            <span class="status">○ later pack</span>
+          </div>
+          <div class="pack health">
+            <h4>Healthcare</h4>
+            <div class="pp">connectors + model</div>
+            <ul><li>HIPAA minimum-necessary</li><li>care-team relationship</li><li>break-the-glass + audit</li></ul>
+            <span class="status">○ later pack</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="moat"><b>Depth = moat.</b> The engine is commodity-grade and proven; the edge is the compounding library of connectors and the correctly-encoded per-vertical permission models. Every connector added and every permission graph synced raises the switching cost. Hard to enter — and once rooted, hard to remove.</div>
+  </section>
+
+  <div class="footer">
+    <span>Groundwork &middot; System Architecture &middot; Phase A deliverable</span>
+    <span>v1 &middot; 2026-06-06</span>
+  </div>
+
+</div>
+</body>
+</html>

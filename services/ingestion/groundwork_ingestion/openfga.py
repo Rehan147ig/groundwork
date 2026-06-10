@@ -6,42 +6,23 @@ from typing import Any
 import requests
 
 
-def authorization_model() -> dict[str, Any]:
-    return {
-        "schema_version": "1.1",
-        "type_definitions": [
-            {"type": "user"},
-            {
-                "type": "group",
-                "relations": {"member": {"this": {}}},
-                "metadata": {
-                    "relations": {
-                        "member": {
-                            "directly_related_user_types": [{"type": "user"}],
-                        }
-                    }
-                },
-            },
-            {
-                "type": "document",
-                "relations": {"viewer": {"this": {}}},
-                "metadata": {
-                    "relations": {
-                        "viewer": {
-                            "directly_related_user_types": [
-                                {"type": "user"},
-                                {"type": "group", "relation": "member"},
-                            ],
-                        }
-                    }
-                },
-            },
-        ],
-    }
-
-
 @dataclass
 class OpenFGAAuthorizer:
+    """OpenFGA client for the ingestion service.
+
+    Scope intentionally narrow: this client discovers/creates the shared OpenFGA
+    store and writes tuples (group memberships, per-document grants). It does NOT
+    write the authorization model. ``services/query-runtime`` is the sole owner of
+    the OpenFGA authorization model.
+
+    Why: previously this module also POSTed an authorization model on first
+    bootstrap. Because ingestion typically starts before query-runtime, its
+    (older, 3-type) model won the race and overwrote query-runtime's newer
+    4-type folder-inheriting model — making every folder-grant permission
+    check silently fail closed. Removing the model write here makes ownership
+    unambiguous and eliminates the race.
+    """
+
     endpoint: str
     store_name: str = "groundwork_local"
     timeout: float = 2.0
@@ -55,7 +36,10 @@ class OpenFGAAuthorizer:
         if self.ready:
             return
         self.store_id = self._ensure_store()
-        self._post(f"/stores/{self.store_id}/authorization-models", authorization_model())
+        # Default demo memberships. These are also written by query-runtime's
+        # seedDefaultMemberships() when it provisions or upgrades the model, so
+        # the runtime guarantees they exist even if this write is skipped below
+        # because the model hasn't been written yet at bootstrap.
         self._write_tuples(
             [
                 {"user": "user:finance_user", "relation": "member", "object": "group:finance"},
@@ -92,8 +76,22 @@ class OpenFGAAuthorizer:
         try:
             self._post(f"/stores/{self.store_id}/write", {"writes": {"tuple_keys": tuples}})
         except requests.HTTPError as exc:
-            if "already" not in exc.response.text.lower():
-                raise
+            text = (exc.response.text if exc.response is not None else "").lower()
+            # Tolerated:
+            #   - "already" / "already exists" -> idempotent re-write.
+            #   - "no authorization model" / "no writable authorization model" /
+            #     "authorization_model_not_found" -> query-runtime has not yet
+            #     written its model. The tuples here are best-effort default
+            #     memberships that query-runtime also writes; skip and continue.
+            tolerated = (
+                "already" in text
+                or "no authorization model" in text
+                or "no writable authorization model" in text
+                or "authorization_model_not_found" in text
+            )
+            if tolerated:
+                return
+            raise
 
     def _get(self, path: str) -> dict[str, Any]:
         response = requests.get(f"{self.endpoint}{path}", timeout=self.timeout)

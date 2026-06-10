@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Groundwork — Bank-Stack Decision Matrix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f7f8f9;
+    --surface-2: #eef0f3;
+    --text: #0a0b0d;
+    --text-2: #2a2f37;
+    --muted: #5c636e;
+    --border: #e2e5ea;
+    --border-strong: #c8cdd5;
+    --green-deep: #0d6b34;
+    --green: #16a34a;
+    --green-soft: #d8f1e1;
+    --amber: #b45309;
+    --amber-soft: #fde9c8;
+    --red: #b91c1c;
+    --red-soft: #fbd9d9;
+    --slate: #475569;
+    --slate-soft: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .page {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 56px 7% 80px;
+  }
+  /* Masthead */
+  .masthead {
+    border-bottom: 2px solid var(--text);
+    padding-bottom: 18px;
+    margin-bottom: 36px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 32px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .brand-mark {
+    width: 14px;
+    height: 14px;
+    background: var(--green);
+    display: inline-block;
+  }
+  .masthead-meta {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    text-align: right;
+  }
+  .masthead-meta strong { color: var(--text); display: block; margin-bottom: 2px; font-weight: 600; }
+  /* Headline */
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--green-deep);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin-bottom: 16px;
+  }
+  h1 {
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-size: 44px;
+    line-height: 1.1;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    margin: 0 0 18px;
+    max-width: 22ch;
+  }
+  .deck {
+    font-size: 18px;
+    color: var(--text-2);
+    line-height: 1.5;
+    max-width: 64ch;
+    margin: 0 0 40px;
+  }
+  /* Orientation note */
+  .orient {
+    background: var(--surface);
+    border-left: 3px solid var(--green);
+    padding: 20px 24px;
+    margin-bottom: 56px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+  }
+  .orient h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin: 0 0 8px;
+  }
+  .orient p { margin: 0; color: var(--text-2); }
+  .orient strong { color: var(--text); }
+  /* Section */
+  section { margin-bottom: 64px; }
+  .section-head {
+    border-top: 1px solid var(--text);
+    padding-top: 18px;
+    margin-bottom: 28px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .section-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  h2 {
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .section-intro {
+    font-size: 16px;
+    color: var(--text-2);
+    max-width: 72ch;
+    margin: -8px 0 32px;
+  }
+  /* Push/Pull architecture */
+  .arch {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 18px;
+    margin-top: 28px;
+  }
+  .arch-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 24px;
+    position: relative;
+  }
+  .arch-card.pull { border-top: 3px solid var(--green); }
+  .arch-card.push { border-top: 3px solid var(--slate); }
+  .arch-card.hybrid { border-top: 3px solid var(--amber); }
+  .arch-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .arch-card.pull .arch-tag { color: var(--green-deep); }
+  .arch-card.push .arch-tag { color: var(--slate); }
+  .arch-card.hybrid .arch-tag { color: var(--amber); }
+  .arch-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 12px;
+    font-family: 'IBM Plex Serif', Georgia, serif;
+  }
+  .arch-diagram {
+    background: var(--surface);
+    padding: 18px 14px;
+    margin: 14px 0 16px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--text-2);
+    border-radius: 2px;
+  }
+  .arch-diagram .src { color: var(--slate); }
+  .arch-diagram .arrow { color: var(--text); font-weight: 600; }
+  .arch-diagram .gw { color: var(--green-deep); font-weight: 600; }
+  .arch-diagram .lbl { color: var(--muted); display: block; padding-left: 14px; font-size: 10px; }
+  .arch-card p { font-size: 14px; color: var(--text-2); margin: 0 0 12px; }
+  .arch-card .fits {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--border);
+    font-size: 13px;
+  }
+  .arch-card .fits strong {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  /* Matrix table */
+  .matrix-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  table.matrix {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    min-width: 980px;
+  }
+  table.matrix thead th {
+    background: var(--text);
+    color: #fff;
+    text-align: left;
+    padding: 14px 14px;
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-family: 'IBM Plex Mono', monospace;
+    vertical-align: bottom;
+    border-right: 1px solid #2a2f37;
+  }
+  table.matrix thead th:last-child { border-right: none; }
+  table.matrix thead th.col-criterion {
+    background: #fff;
+    color: var(--muted);
+    width: 200px;
+    border-bottom: 2px solid var(--text);
+    border-right: 1px solid var(--border);
+  }
+  table.matrix tbody td {
+    padding: 14px;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    vertical-align: top;
+    color: var(--text-2);
+    line-height: 1.45;
+  }
+  table.matrix tbody td:last-child { border-right: none; }
+  table.matrix tbody tr:last-child td { border-bottom: none; }
+  table.matrix .row-label {
+    background: var(--surface);
+    color: var(--text);
+    font-weight: 600;
+    font-size: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-right: 1px solid var(--border-strong);
+  }
+  table.matrix .row-label .row-sub {
+    display: block;
+    font-family: 'Inter', sans-serif;
+    font-weight: 400;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: none;
+    letter-spacing: 0;
+    margin-top: 2px;
+  }
+  .col-recommended { background: #f4fbf6; }
+  .col-recommended-head {
+    background: var(--green-deep) !important;
+    color: #fff !important;
+    position: relative;
+  }
+  .col-recommended-head::after {
+    content: 'RECOMMENDED';
+    position: absolute;
+    top: -10px;
+    right: 8px;
+    background: var(--green);
+    color: #fff;
+    font-size: 9px;
+    padding: 3px 8px;
+    letter-spacing: 0.1em;
+    border-radius: 2px;
+  }
+  /* Pills */
+  .pill {
+    display: inline-block;
+    padding: 3px 9px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 100px;
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 0.04em;
+  }
+  .pill.good { background: var(--green-soft); color: var(--green-deep); }
+  .pill.warn { background: var(--amber-soft); color: var(--amber); }
+  .pill.bad { background: var(--red-soft); color: var(--red); }
+  .pill.neutral { background: var(--slate-soft); color: var(--slate); }
+  /* System detail cards */
+  .systems {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .sys-card {
+    border: 1px solid var(--border);
+    padding: 26px;
+    background: var(--bg);
+  }
+  .sys-card.featured {
+    border: 2px solid var(--green-deep);
+    background: #f9fdfb;
+    grid-column: 1 / -1;
+  }
+  .sys-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sys-name {
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  .sys-kicker {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .sys-card.featured .sys-kicker { color: var(--green-deep); }
+  .sys-grid {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 6px 18px;
+    font-size: 13px;
+    margin-bottom: 14px;
+  }
+  .sys-grid dt {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    padding-top: 2px;
+  }
+  .sys-grid dd { margin: 0; color: var(--text-2); }
+  .sys-takeaway {
+    background: var(--surface);
+    padding: 12px 16px;
+    border-left: 2px solid var(--text);
+    font-size: 13px;
+    color: var(--text-2);
+    margin-top: 14px;
+  }
+  .sys-card.featured .sys-takeaway {
+    border-left-color: var(--green-deep);
+    background: #ecfaf1;
+  }
+  .sys-takeaway strong { color: var(--text); }
+  /* Recommendation */
+  .recommend {
+    background: var(--text);
+    color: #fff;
+    padding: 40px 36px;
+    margin-top: 40px;
+  }
+  .recommend .eyebrow { color: var(--green); }
+  .recommend h2 {
+    color: #fff;
+    margin-bottom: 16px;
+    font-size: 30px;
+  }
+  .recommend p {
+    color: #d6d8dc;
+    margin: 0 0 16px;
+    max-width: 70ch;
+    font-size: 15px;
+  }
+  .recommend ul {
+    color: #d6d8dc;
+    margin: 0 0 18px;
+    padding-left: 18px;
+    font-size: 14px;
+  }
+  .recommend ul li { margin-bottom: 6px; }
+  .recommend strong { color: #fff; }
+  .recommend .why {
+    margin-top: 22px;
+    padding-top: 22px;
+    border-top: 1px solid #2a2f37;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+  }
+  .recommend .why h4 {
+    color: var(--green);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+  .recommend .why p {
+    color: #d6d8dc;
+    font-size: 13px;
+    margin: 0;
+  }
+  /* Footer */
+  .footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 0.04em;
+    display: flex;
+    justify-content: space-between;
+  }
+  /* Responsive */
+  @media (max-width: 900px) {
+    .arch, .orient, .systems, .recommend .why { grid-template-columns: 1fr; }
+    h1 { font-size: 32px; }
+    .page { padding: 36px 5% 60px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- MASTHEAD -->
+  <div class="masthead">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <span>Groundwork &mdash; Solution Engineering</span>
+    </div>
+    <div class="masthead-meta">
+      <strong>Decision Matrix &middot; v1</strong>
+      Confidential &middot; June 2026
+    </div>
+  </div>
+
+  <!-- HEADLINE -->
+  <div class="eyebrow">Phase A &middot; Bank-Stack Selection</div>
+  <h1>Where Groundwork tests best against a bank-shaped Java backend.</h1>
+  <p class="deck">A working comparison of the four banking systems most often proposed as test targets &mdash; plus the synthetic baseline Groundwork already supports &mdash; scored on what actually matters for proving runtime AI access-control.</p>
+
+  <!-- ORIENTATION -->
+  <div class="orient">
+    <div>
+      <h3>What Groundwork is</h3>
+      <p>The <strong>AI runtime access-control layer.</strong> It sits between an AI agent and the document stores the agent retrieves from. Every chunk is checked against the company&rsquo;s real permission graph at query time, fail-closed, with a tamper-evident audit trace.</p>
+    </div>
+    <div>
+      <h3>What Groundwork is not</h3>
+      <p><strong>Not a core banking system.</strong> It does not hold accounts, balances, or ledgers. It protects the AI&rsquo;s <strong>document retrieval surface</strong> &mdash; policies, memos, customer files, KYC packets &mdash; over whatever knowledge stores the bank already runs.</p>
+    </div>
+  </div>
+
+  <!-- 01 — PUSH vs PULL -->
+  <section>
+    <div class="section-head">
+      <span class="section-num">01 &middot; Integration Architecture</span>
+      <h2>Push vs. Pull &mdash; how Groundwork plugs into a bank&rsquo;s permission graph.</h2>
+    </div>
+    <p class="section-intro">Groundwork&rsquo;s job at integration time is to learn <em>who can see what</em> from the bank&rsquo;s systems of record, then keep that view current as people join, change roles, and leave. There is no single right way to do that &mdash; banks run a mix of open-API platforms, modern SaaS, and proprietary cores that don&rsquo;t expose a clean permission API at all. Groundwork supports three patterns, deliberately, so the integration choice fits the source system rather than the other way around.</p>
+
+    <div class="arch">
+      <div class="arch-card pull">
+        <div class="arch-tag">Pattern A</div>
+        <h3 class="arch-title">API Pull Connectors</h3>
+        <div class="arch-diagram">
+          <span class="src">Bank System</span> &mdash; <span class="arrow">GET /users, /permissions</span> &rarr; <span class="gw">Groundwork</span>
+          <span class="lbl">poll on schedule + delta tokens</span>
+        </div>
+        <p>Groundwork periodically reads users, groups, and document grants from the source via its REST API, computes a diff against the OpenFGA tuples it already holds, and writes only the changes. Source of truth stays in the bank&rsquo;s system; Groundwork is a derived view.</p>
+        <div class="fits">
+          <strong>Fits</strong>
+          Apache Fineract &middot; Open Bank Project &middot; Microsoft Graph &middot; Okta &middot; any system with documented read APIs and stable schemas.
+        </div>
+      </div>
+
+      <div class="arch-card hybrid">
+        <div class="arch-tag">Pattern B</div>
+        <h3 class="arch-title">Hybrid &mdash; API + Webhook</h3>
+        <div class="arch-diagram">
+          <span class="src">Bank SaaS</span> &mdash; <span class="arrow">GET (baseline)</span> &rarr; <span class="gw">Groundwork</span>
+          <span class="lbl">+ POST /sync/event on every change</span>
+        </div>
+        <p>One pull builds the baseline, then the source pushes change events as they happen. Near-real-time without polling pressure, with the API as a fallback when an event is lost. The right pattern when the source is modern SaaS and revocation latency matters.</p>
+        <div class="fits">
+          <strong>Fits</strong>
+          Mambu &middot; modern SaaS cores &middot; HRIS systems with event streams &middot; any source where seconds, not minutes, matter for revocation.
+        </div>
+      </div>
+
+      <div class="arch-card push">
+        <div class="arch-tag">Pattern C</div>
+        <h3 class="arch-title">Webhook Push API &middot; Sidecar Ingest</h3>
+        <div class="arch-diagram">
+          <span class="src">Proprietary Core</span> &mdash; <span class="arrow">POST /sync/event</span> &rarr; <span class="gw">Groundwork</span>
+          <span class="lbl">bank-side sidecar emits ACL events</span>
+        </div>
+        <p>When the source has no readable permission API &mdash; or its API is too closed, slow, or licensed-per-call to query &mdash; the bank installs a thin sidecar that watches its core&rsquo;s change feed and posts events to Groundwork&rsquo;s ingest endpoint. Push-only, Groundwork never reaches into the core. Critical for highly customized environments and regulators who require <em>nothing pulls from the core</em>.</p>
+        <div class="fits">
+          <strong>Fits</strong>
+          Temenos T24 / Transact &middot; FIS / Fiserv mainframe cores &middot; any heavily customized or air-gapped system where pull is disallowed.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 — MATRIX -->
+  <section>
+    <div class="section-head">
+      <span class="section-num">02 &middot; Decision Matrix</span>
+      <h2>The four real options &mdash; plus the synthetic baseline.</h2>
+    </div>
+    <p class="section-intro">Every row is a criterion that actually matters to <em>this</em> decision: can we stand it up, does it produce the surface Groundwork protects, will it convince a bank&rsquo;s security buyer, and how soon can we be demoing? Cells answer the question for each system, not a generic capability rating.</p>
+
+    <div class="matrix-wrap">
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th class="col-criterion">Criterion</th>
+            <th>Apache Fineract</th>
+            <th>Temenos</th>
+            <th>Mambu</th>
+            <th>Open Bank Project</th>
+            <th class="col-recommended-head">Synthetic baseline + Java Spring Boot client</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="row-label">System type<span class="row-sub">What it actually is</span></td>
+            <td>Open-source core banking ledger (Spring Boot, Java 21)</td>
+            <td>Commercial Tier-1 core banking platform</td>
+            <td>Cloud-native SaaS core banking</td>
+            <td>Open-banking API sandbox (OAuth2, mTLS, consent)</td>
+            <td class="col-recommended">Curated bank-shaped document corpus + OpenFGA permission graph + Java client</td>
+          </tr>
+          <tr>
+            <td class="row-label">Access<span class="row-sub">Can a solo founder use it?</span></td>
+            <td><span class="pill good">Open source</span> self-host today</td>
+            <td><span class="pill bad">Closed</span> requires sales / partnership</td>
+            <td><span class="pill warn">SaaS sandbox</span> approval required</td>
+            <td><span class="pill good">Open source</span> public sandbox available</td>
+            <td class="col-recommended"><span class="pill good">In-repo</span> existing seed tooling</td>
+          </tr>
+          <tr>
+            <td class="row-label">Java story<span class="row-sub">Does it answer the &ldquo;Java?&rdquo; question banks ask?</span></td>
+            <td><span class="pill good">Strong</span> Java 21 / Spring Boot core</td>
+            <td><span class="pill good">Strong</span> Java + Groovy extensibility</td>
+            <td><span class="pill warn">Partial</span> Java SDK, SaaS core</td>
+            <td><span class="pill good">Strong</span> Scala/Java API platform</td>
+            <td class="col-recommended"><span class="pill good">Strong</span> real Spring Boot client calls Groundwork</td>
+          </tr>
+          <tr>
+            <td class="row-label">Document surface<span class="row-sub">Does it produce what Groundwork protects?</span></td>
+            <td><span class="pill bad">No</span> ledger only &mdash; no documents</td>
+            <td><span class="pill warn">Indirect</span> via add-on doc modules</td>
+            <td><span class="pill bad">No</span> ledger / SaaS data only</td>
+            <td><span class="pill warn">Indirect</span> consent/transaction APIs</td>
+            <td class="col-recommended"><span class="pill good">Yes</span> classified bank docs, real personas, real role boundaries</td>
+          </tr>
+          <tr>
+            <td class="row-label">Permission realism<span class="row-sub">Are the role boundaries meaningful?</span></td>
+            <td>RBAC on accounts/loans &mdash; not document-shaped</td>
+            <td>Deep but opaque without partnership</td>
+            <td>SaaS RBAC &mdash; not document-shaped</td>
+            <td>OAuth scopes &mdash; consent, not knowledge</td>
+            <td class="col-recommended">Modeled on real bank role separation (RM, ops, compliance, audit)</td>
+          </tr>
+          <tr>
+            <td class="row-label">Integration pattern<span class="row-sub">How Groundwork plugs in</span></td>
+            <td><span class="pill neutral">Pull</span> REST API connector</td>
+            <td><span class="pill neutral">Push</span> webhook sidecar</td>
+            <td><span class="pill neutral">Hybrid</span> API + webhook</td>
+            <td><span class="pill neutral">Pull</span> REST API connector</td>
+            <td class="col-recommended"><span class="pill neutral">Pull</span> direct OpenFGA seed</td>
+          </tr>
+          <tr>
+            <td class="row-label">Operational cost<span class="row-sub">To stand up the test environment</span></td>
+            <td><span class="pill warn">Medium</span> Docker + MariaDB + Gradle build</td>
+            <td><span class="pill bad">High</span> licensing, deploy, expertise</td>
+            <td><span class="pill warn">Medium</span> sandbox provisioning</td>
+            <td><span class="pill warn">Medium</span> Scala build + Postgres</td>
+            <td class="col-recommended"><span class="pill good">Low</span> reuses existing GW compose stack</td>
+          </tr>
+          <tr>
+            <td class="row-label">Demo usefulness<span class="row-sub">For investors and bank security buyers</span></td>
+            <td>Shows Java integration; doesn&rsquo;t show the AI claim</td>
+            <td>Strong logo recognition; impossible to actually run</td>
+            <td>Shows SaaS pattern; weak storytelling without docs</td>
+            <td>Good for consent / OAuth story, not retrieval</td>
+            <td class="col-recommended">Directly demonstrates fail-closed, shadow mode, audit &mdash; the actual claim</td>
+          </tr>
+          <tr>
+            <td class="row-label">Time to working demo<span class="row-sub">From decision to first run</span></td>
+            <td>3&ndash;5 days</td>
+            <td>Months (with luck)</td>
+            <td>2&ndash;3 weeks (sandbox + integration)</td>
+            <td>2&ndash;4 days</td>
+            <td class="col-recommended">1&ndash;2 days</td>
+          </tr>
+          <tr>
+            <td class="row-label">Recommendation<span class="row-sub">For the next demo</span></td>
+            <td><span class="pill warn">Later</span> Java connector showcase</td>
+            <td><span class="pill bad">Future</span> commercial partnership</td>
+            <td><span class="pill warn">Later</span> SaaS pattern showcase</td>
+            <td><span class="pill warn">Optional</span> OAuth/consent story</td>
+            <td class="col-recommended"><span class="pill good">Build now</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 03 — SYSTEM DETAIL -->
+  <section>
+    <div class="section-head">
+      <span class="section-num">03 &middot; System-by-System</span>
+      <h2>The honest read on each option.</h2>
+    </div>
+    <p class="section-intro">Per-system context for the bank stakeholders who will dig into <em>why</em> a particular target was chosen or set aside. The order is the matrix order; the takeaway in each card is the position Groundwork takes externally.</p>
+
+    <div class="systems">
+
+      <article class="sys-card">
+        <div class="sys-head">
+          <div>
+            <h3 class="sys-name">Apache Fineract</h3>
+            <div class="sys-kicker">Open-source core banking &middot; Java 21 / Spring Boot</div>
+          </div>
+          <span class="pill warn">Useful later</span>
+        </div>
+        <dl class="sys-grid">
+          <dt>Strength</dt><dd>The cleanest real Java banking engine to point at when banks ask whether Groundwork integrates with a Java stack. Spring Boot, plugin JARs, well-documented REST API.</dd>
+          <dt>Weakness</dt><dd>It&rsquo;s a <em>ledger</em>, not a knowledge store. It tracks accounts, loans, transactions &mdash; not the policies and memos Groundwork is built to gate. Adding it now buys integration credibility, not test coverage of the actual claim.</dd>
+          <dt>Pattern</dt><dd>Pattern A &mdash; API Pull Connector. Pull users and customer-record visibility through Fineract&rsquo;s REST API into OpenFGA tuples.</dd>
+        </dl>
+        <div class="sys-takeaway"><strong>External read:</strong> &ldquo;Groundwork has an Apache Fineract pull connector for banks running open-source cores.&rdquo; A milestone for later, not the first demo.</div>
+      </article>
+
+      <article class="sys-card">
+        <div class="sys-head">
+          <div>
+            <h3 class="sys-name">Temenos</h3>
+            <div class="sys-kicker">Commercial Tier-1 core &middot; Java + Groovy extensibility</div>
+          </div>
+          <span class="pill bad">Future commercial</span>
+        </div>
+        <dl class="sys-grid">
+          <dt>Strength</dt><dd>The platform name on a deck that opens enterprise banking doors. Real Java extensibility surface. The system most large banks actually run for the things Groundwork would protect.</dd>
+          <dt>Weakness</dt><dd>No realistic free sandbox path. Without a Temenos partnership, you cannot demo against it. Treat it as a commercial integration target once Groundwork has paying customers running Temenos.</dd>
+          <dt>Pattern</dt><dd>Pattern C &mdash; Webhook Push / sidecar. Temenos environments are too closed for pull; a bank-side sidecar that emits ACL change events to Groundwork is the only realistic shape.</dd>
+        </dl>
+        <div class="sys-takeaway"><strong>External read:</strong> &ldquo;Groundwork integrates with Temenos via a push-based sidecar pattern for banks that cannot expose pull APIs to the AI layer.&rdquo; A pitch, not a demo &mdash; yet.</div>
+      </article>
+
+      <article class="sys-card">
+        <div class="sys-head">
+          <div>
+            <h3 class="sys-name">Mambu</h3>
+            <div class="sys-kicker">Cloud-native SaaS core &middot; API-first</div>
+          </div>
+          <span class="pill warn">Showcase later</span>
+        </div>
+        <dl class="sys-grid">
+          <dt>Strength</dt><dd>The cleanest modern SaaS banking architecture and the closest to what newer banks and fintechs actually run. Strong API surface, real event/webhook story.</dd>
+          <dt>Weakness</dt><dd>Sandbox access requires partner provisioning, and Mambu still doesn&rsquo;t produce the document surface Groundwork protects. The integration story is strong; the test coverage of the claim is thin.</dd>
+          <dt>Pattern</dt><dd>Pattern B &mdash; Hybrid. Pull a baseline through Mambu&rsquo;s API, then subscribe to webhooks for change events. Near-real-time revocation without polling.</dd>
+        </dl>
+        <div class="sys-takeaway"><strong>External read:</strong> &ldquo;For Mambu-based banks Groundwork uses a hybrid API + webhook pattern, baseline pull plus event-driven updates.&rdquo; A second-wave demo target.</div>
+      </article>
+
+      <article class="sys-card">
+        <div class="sys-head">
+          <div>
+            <h3 class="sys-name">Open Bank Project</h3>
+            <div class="sys-kicker">Open-source banking API sandbox &middot; Scala/Java</div>
+          </div>
+          <span class="pill warn">Optional</span>
+        </div>
+        <dl class="sys-grid">
+          <dt>Strength</dt><dd>The best free sandbox for OAuth2 / consent / mTLS / JWS flows &mdash; the developer-facing edge of a bank, rather than its core. Useful when the conversation is about <em>consent</em> rather than <em>retrieval</em>.</dd>
+          <dt>Weakness</dt><dd>Like Fineract it&rsquo;s API-and-consent shaped, not document shaped. The retrieval claim Groundwork makes does not land naturally against OBP without a synthetic document layer on top.</dd>
+          <dt>Pattern</dt><dd>Pattern A &mdash; API Pull. Pull consents and account-access scopes from OBP into OpenFGA.</dd>
+        </dl>
+        <div class="sys-takeaway"><strong>External read:</strong> A useful side-demo for the open-banking / consent conversation. Not the headline demo.</div>
+      </article>
+
+      <article class="sys-card featured">
+        <div class="sys-head">
+          <div>
+            <div class="sys-kicker">Recommended for the next demo</div>
+            <h3 class="sys-name">Synthetic bank-document corpus &middot; OpenFGA permission graph &middot; Java Spring Boot client</h3>
+          </div>
+          <span class="pill good">Build now</span>
+        </div>
+        <dl class="sys-grid">
+          <dt>What it is</dt><dd>A curated, clearly-synthetic library of bank-shaped documents &mdash; credit memos, KYC packets, internal policy memos, audit findings, customer correspondence &mdash; loaded into Qdrant; a realistic role and group model loaded into OpenFGA; and a Java Spring Boot application that plays the part of an internal bank tool calling Groundwork over its REST API and MCP endpoint.</dd>
+          <dt>Why it wins</dt><dd>It tests <em>the actual claim</em>. Fail-closed only matters if there is a document to fail closed on. Shadow mode only matters if there is a believable role boundary. Audit only matters if there is a sensitive query to audit. None of the four real systems gives Groundwork all three without a synthetic document layer added on top &mdash; so the synthetic layer is the work, regardless of which core sits behind it.</dd>
+          <dt>Reuse</dt><dd>Groundwork&rsquo;s existing <code style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">loadtest -mode=seed</code> tool already seeds a bank-shaped users/docs/OpenFGA dataset. The build is curating that into deck-grade content, adding the Java client, and writing a tight demo script &mdash; not standing up a new core.</dd>
+          <dt>Pattern</dt><dd>Pattern A &mdash; direct OpenFGA seed. In production the same tuples come from a Fineract or Microsoft Graph pull connector or a Temenos push sidecar; for the demo the source is the seed tool, which keeps the demo deterministic and reproducible on a laptop.</dd>
+        </dl>
+        <div class="sys-takeaway"><strong>External read:</strong> &ldquo;Here is a realistic bank knowledge surface with realistic role separation. Watch what Groundwork lets each persona retrieve, what it blocks, what shadow mode would have blocked, and the tamper-evident audit trail it leaves behind.&rdquo;</div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- 04 — RECOMMENDATION -->
+  <section>
+    <div class="section-head">
+      <span class="section-num">04 &middot; Recommendation</span>
+      <h2>Build the synthetic baseline now. Earn the rest later.</h2>
+    </div>
+
+    <div class="recommend">
+      <div class="eyebrow">Phase B &middot; Decision</div>
+      <h2>Synthetic banking corpus + Java Spring Boot client &mdash; behind Groundwork&rsquo;s existing runtime.</h2>
+      <p>The four real systems each answer a single question well: Fineract answers <em>do you do Java cores</em>; Temenos answers <em>do you sell to Tier 1</em>; Mambu answers <em>do you do modern SaaS</em>; Open Bank Project answers <em>do you do consent</em>. None of them, on their own, answers the question Groundwork actually has to answer for a bank security buyer:</p>
+      <ul>
+        <li>Can you stop the AI from retrieving a document this user is not allowed to see?</li>
+        <li>Can you run silently first and show me what would have leaked under my current setup?</li>
+        <li>Can you give me an audit trail that survives my regulator?</li>
+      </ul>
+      <p>The synthetic baseline answers all three, on a laptop, in days, against the real Groundwork runtime &mdash; with the Java Spring Boot client carrying the &ldquo;and yes, this works from your Java stack&rdquo; story for any bank that asks. Then, once the demo lands, the Fineract pull connector becomes the next logical milestone, followed by the Temenos sidecar pattern, then Mambu, in that order, driven by which pilot conversation actually progresses.</p>
+
+      <div class="why">
+        <div>
+          <h4>What this demo proves</h4>
+          <p>Fail-closed against a real document set, shadow mode with believable false-positive numbers, and an audit chain a bank auditor can hash-verify themselves.</p>
+        </div>
+        <div>
+          <h4>What this demo carefully avoids</h4>
+          <p>Pretending to be integrated with a bank we are not integrated with. The corpus is clearly synthetic. Every screen says so.</p>
+        </div>
+        <div>
+          <h4>What it sets up next</h4>
+          <p>The Fineract pull connector and the Temenos push sidecar slot in behind the same OpenFGA seed surface &mdash; no rewrite, just a different source.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    <span>Groundwork &middot; Decision Matrix &middot; Phase A deliverable</span>
+    <span>v1 &middot; 2026-06-06</span>
+  </div>
+
+</div>
+</body>
+</html>

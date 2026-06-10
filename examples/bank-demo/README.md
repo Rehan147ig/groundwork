@@ -58,7 +58,12 @@ export GROUNDWORK_API_KEY_BOOTSTRAP=gw_local_demo_bank_key
 export GROUNDWORK_TENANT_BOOTSTRAP=demo_bank
 export GROUNDWORK_REGION_BOOTSTRAP=uk
 export GROUNDWORK_JWT_HS_SECRET="demo-only-replace-in-production"
-export DATABASE_URL="postgres://groundwork:groundwork@localhost:5432/groundwork?sslmode=disable"
+# Use the $DATABASE_URL from your environment / secrets manager.
+# The bank-demo docker-compose creates a Postgres with credentials
+# defined in docker-compose.demo.yml (env: POSTGRES_USER/POSTGRES_PASSWORD).
+# Construct the URL with your own credentials — never paste production
+# passwords into README files or commit them.
+export DATABASE_URL="postgres://$USER:$PASSWORD@localhost:5432/$DB?sslmode=disable"
 export QDRANT_URL=http://localhost:6333
 export OPENFGA_URL=http://localhost:8081
 export EMBEDDING_URL=http://localhost:9000
@@ -83,7 +88,7 @@ go run . \
   -openfga=http://localhost:8081 \
   -corpus=../corpus \
   -personas=../personas/personas.json \
-  -postgres="postgres://groundwork:groundwork@localhost:5432/groundwork?sslmode=disable"
+  -postgres="$DATABASE_URL"   # use the same URL the runtime is reading
 # Expect: ~18 documents, ~60-80 chunks, ~120 OpenFGA tuples written,
 # and ~18 demo.documents rows + per-doc grants for the Leak Report.
 # (-postgres can be omitted on a Qdrant+OpenFGA-only smoke run; the
@@ -157,8 +162,8 @@ See `DEMO-SCRIPT.md` for the exact talking script. The five-minute version: swit
 
 ```bash
 cd services/query-runtime
-DATABASE_URL="postgres://groundwork:groundwork@localhost:5432/groundwork?sslmode=disable" \
-  go run ./cmd/audit-verify
+# $DATABASE_URL must already be set (see "Build and run" above).
+go run ./cmd/audit-verify
 # Expect: "audit chain verified, N entries, no gaps, no tampering".
 ```
 

@@ -36,6 +36,13 @@ func NewPostgresCatalogWriter(db *sql.DB) *PostgresCatalogWriter {
 }
 
 func (w *PostgresCatalogWriter) UpsertPrincipal(ctx context.Context, tenantID string, p Principal) error {
+	// PR #19 follow-up: COALESCE(EXCLUDED.x, msgraph.principals.x) preserves
+	// the previously-stored value when Graph returns NULL/empty for a field
+	// on a re-sync. Without this, a service account whose mail attribute is
+	// briefly omitted on one /users page would have its previously-stored
+	// email clobbered to NULL. account_enabled and gw_canonical_id are not
+	// wrapped: both are non-nullable in the column and authoritative on
+	// every read from Graph.
 	const q = `
 INSERT INTO msgraph.principals (
     tenant_id, entra_oid, gw_canonical_id, upn, email, display_name,
@@ -43,9 +50,9 @@ INSERT INTO msgraph.principals (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), '{}'::jsonb, NOW())
 ON CONFLICT (tenant_id, entra_oid) DO UPDATE SET
-    upn             = EXCLUDED.upn,
-    email           = EXCLUDED.email,
-    display_name    = EXCLUDED.display_name,
+    upn             = COALESCE(EXCLUDED.upn,          msgraph.principals.upn),
+    email           = COALESCE(EXCLUDED.email,        msgraph.principals.email),
+    display_name    = COALESCE(EXCLUDED.display_name, msgraph.principals.display_name),
     account_enabled = EXCLUDED.account_enabled,
     last_seen_at    = NOW(),
     updated_at      = NOW()

@@ -92,6 +92,16 @@ func (p *PostgresAuditReader) ListAuditEntries(ctx context.Context, tenantID str
 		args = append(args, filter.DecisionMode)
 		where = append(where, fmt.Sprintf("decision_mode = $%d", len(args)))
 	}
+	// PR #22 R-3: acl_decision + region filters for Dashboard L2.
+	// Exact-match strings against the existing audit_log columns.
+	if filter.ACLDecision != "" {
+		args = append(args, filter.ACLDecision)
+		where = append(where, fmt.Sprintf("acl_decision = $%d", len(args)))
+	}
+	if filter.Region != "" {
+		args = append(args, filter.Region)
+		where = append(where, fmt.Sprintf("region = $%d", len(args)))
+	}
 	if filter.FailClosed != nil {
 		args = append(args, *filter.FailClosed)
 		where = append(where, fmt.Sprintf("fail_closed = $%d", len(args)))
@@ -110,6 +120,10 @@ func (p *PostgresAuditReader) ListAuditEntries(ctx context.Context, tenantID str
 	}
 	args = append(args, limit+1) // fetch one extra to detect "has next page"
 
+	// PR #22 R-2 fix: the list endpoint's summaryFromRead drops
+	// immutable_digest and previous_hash on the way out, so don't
+	// transfer them from the DB. Detail endpoint (GetAuditEntry) still
+	// fetches them — that's where the wire contract returns them.
 	query := `
 		SELECT trace_id, tenant_id, user_id, query_hash, timestamp_utc, region,
 		       candidates_retrieved, candidates_allowed, candidates_blocked,
@@ -118,7 +132,6 @@ func (p *PostgresAuditReader) ListAuditEntries(ctx context.Context, tenantID str
 		       circuit_breaker_state, decision_mode, acl_decision, reason,
 		       identity_resolution, principal_id,
 		       agent_key_id, agent_key_name,
-		       immutable_digest, previous_hash,
 		       id
 		FROM audit_log
 		WHERE ` + strings.Join(where, " AND ") + `
@@ -293,78 +306,126 @@ func (p *PostgresAuditReader) ListAuditStats(ctx context.Context, tenantID strin
 	}
 
 	args := []any{tenantID, to.UTC()}
-	where := "tenant_id = $1 AND timestamp_utc < $2"
+	whereClause := "tenant_id = $1 AND timestamp_utc < $2"
 	if !from.IsZero() {
 		args = append(args, from.UTC())
-		where += fmt.Sprintf(" AND timestamp_utc >= $%d", len(args))
+		whereClause += fmt.Sprintf(" AND timestamp_utc >= $%d", len(args))
 	}
 
-	if err := p.db.QueryRowContext(ctx,
-		`SELECT COUNT(*), COUNT(*) FILTER (WHERE fail_closed) FROM audit_log WHERE `+where,
-		args...,
-	).Scan(&stats.TotalQueries, &stats.FailClosedCount); err != nil {
-		return runtime.AuditStats{}, fmt.Errorf("query totals: %w", err)
-	}
+	// PR #22 R-4: single CTE + UNION ALL replaces the 4-round-trip
+	// aggregation. Postgres inlines the CTE (it's only referenced
+	// once per branch); each branch is a simple aggregate over the
+	// already-filtered window. One DB round-trip; one network hop;
+	// one transaction snapshot — so the four breakdowns see a
+	// consistent set of rows even under concurrent inserts (the
+	// prior 4-query version could observe an insert between the
+	// totals query and the by_decision_mode query and disagree).
+	//
+	// Row shape (all branches share the same column set so Postgres
+	// can UNION ALL them):
+	//   kind text, str_key text, num_key bigint, count integer
+	// Branches:
+	//   kind='total'             : str_key=NULL, num_key=NULL — total row count
+	//   kind='fail_closed'       : str_key=NULL, num_key=NULL — fail-closed count
+	//   kind='by_decision_mode'  : str_key=<decision_mode>
+	//   kind='by_acl_decision'   : str_key=<acl_decision>
+	//   kind='top_agent'         : str_key=<agent_key_name>, num_key=<agent_key_id>
+	query := `
+		WITH win AS (
+			SELECT decision_mode, acl_decision, fail_closed, agent_key_id, agent_key_name
+			FROM audit_log
+			WHERE ` + whereClause + `
+		)
+		SELECT 'total'::text            AS kind,
+		       NULL::text                AS str_key,
+		       NULL::bigint              AS num_key,
+		       COUNT(*)::integer         AS count
+		FROM win
+		UNION ALL
+		SELECT 'fail_closed', NULL, NULL, COUNT(*)::integer
+		FROM win WHERE fail_closed
+		UNION ALL
+		SELECT 'by_decision_mode', decision_mode, NULL, COUNT(*)::integer
+		FROM win GROUP BY decision_mode
+		UNION ALL
+		SELECT 'by_acl_decision', acl_decision, NULL, COUNT(*)::integer
+		FROM win GROUP BY acl_decision
+		UNION ALL
+		SELECT 'top_agent', agent_key_name, agent_key_id, c::integer
+		FROM (
+			SELECT agent_key_id,
+			       MAX(agent_key_name) AS agent_key_name,
+			       COUNT(*) AS c
+			FROM win
+			WHERE agent_key_id IS NOT NULL
+			GROUP BY agent_key_id
+			ORDER BY c DESC, agent_key_id ASC
+			LIMIT 10
+		) t
+	`
 
-	if err := p.aggregate(ctx, `decision_mode`, where, args, stats.ByDecisionMode); err != nil {
-		return runtime.AuditStats{}, err
-	}
-	if err := p.aggregate(ctx, `acl_decision`, where, args, stats.ByACLDecision); err != nil {
-		return runtime.AuditStats{}, err
-	}
-
-	rows, err := p.db.QueryContext(ctx,
-		`SELECT agent_key_id, MAX(agent_key_name), COUNT(*) AS c
-		 FROM audit_log
-		 WHERE `+where+` AND agent_key_id IS NOT NULL
-		 GROUP BY agent_key_id
-		 ORDER BY c DESC, agent_key_id ASC
-		 LIMIT 10`,
-		args...,
-	)
+	rows, err := p.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return runtime.AuditStats{}, fmt.Errorf("query top_agents: %w", err)
+		return runtime.AuditStats{}, fmt.Errorf("query stats: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var a runtime.AgentStat
-		var keyName sql.NullString
-		if err := rows.Scan(&a.AgentKeyID, &keyName, &a.Count); err != nil {
-			return runtime.AuditStats{}, fmt.Errorf("scan top_agents: %w", err)
+		var (
+			kind    string
+			strKey  sql.NullString
+			numKey  sql.NullInt64
+			count   int
+		)
+		if err := rows.Scan(&kind, &strKey, &numKey, &count); err != nil {
+			return runtime.AuditStats{}, fmt.Errorf("scan stats: %w", err)
 		}
-		a.AgentKeyName = keyName.String
-		stats.TopAgents = append(stats.TopAgents, a)
+		switch kind {
+		case "total":
+			stats.TotalQueries = count
+		case "fail_closed":
+			stats.FailClosedCount = count
+		case "by_decision_mode":
+			stats.ByDecisionMode[strKey.String] = count
+		case "by_acl_decision":
+			stats.ByACLDecision[strKey.String] = count
+		case "top_agent":
+			stats.TopAgents = append(stats.TopAgents, runtime.AgentStat{
+				AgentKeyID:   numKey.Int64,
+				AgentKeyName: strKey.String,
+				Count:        count,
+			})
+		}
 	}
 	return stats, rows.Err()
-}
-
-func (p *PostgresAuditReader) aggregate(ctx context.Context, column, where string, args []any, into map[string]int) error {
-	q := fmt.Sprintf(`SELECT %s, COUNT(*) FROM audit_log WHERE %s GROUP BY %s`, column, where, column)
-	rows, err := p.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return fmt.Errorf("aggregate by %s: %w", column, err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var key string
-		var count int
-		if err := rows.Scan(&key, &count); err != nil {
-			return fmt.Errorf("scan aggregate %s: %w", column, err)
-		}
-		into[key] = count
-	}
-	return rows.Err()
 }
 
 // VerifyTenantChain is the read-API wrapper around LoadAuditChain +
 // VerifyChain. Reuses both VERBATIM — this method introduces NO new
 // verification logic.
+//
+// PR #22 R-1: chain size is bounded by runtime.MaxAuditVerifyEntries.
+// We COUNT(*) first to refuse cheaply for over-large chains rather
+// than buffer 100k+ rows server-side. A follow-up PR can add
+// checkpoint anchors (verify only the suffix past a previously-
+// attested anchor) for tenants that legitimately exceed the cap.
 func (p *PostgresAuditReader) VerifyTenantChain(ctx context.Context, tenantID string) (runtime.AuditVerifyResult, error) {
 	if p == nil || p.db == nil {
 		return runtime.AuditVerifyResult{}, errors.New("audit db unavailable")
 	}
 	if tenantID == "" {
 		return runtime.AuditVerifyResult{}, errors.New("tenant_id is required")
+	}
+	var count int
+	if err := p.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM audit_log WHERE tenant_id = $1`, tenantID,
+	).Scan(&count); err != nil {
+		return runtime.AuditVerifyResult{}, fmt.Errorf("count chain: %w", err)
+	}
+	if count > runtime.MaxAuditVerifyEntries {
+		return runtime.AuditVerifyResult{}, &runtime.ChainTooLargeError{
+			EntriesChecked: count,
+			MaxAllowed:     runtime.MaxAuditVerifyEntries,
+		}
 	}
 	entries, err := LoadAuditChain(ctx, p.db, tenantID)
 	if err != nil {
@@ -393,15 +454,20 @@ func (p *PostgresAuditReader) VerifyTenantChain(ctx context.Context, tenantID st
 // scanReadRow scans one audit_log row into a runtime.AuditEntryRead.
 // Returns the row's id column separately so the caller can encode it
 // into the pagination cursor without re-querying.
+//
+// PR #22 R-2: immutable_digest and previous_hash are NOT scanned here
+// — the list endpoint drops them via summaryFromRead. AuditEntryRead's
+// ImmutableDigest/PreviousHash come back empty from the list path;
+// GetAuditEntry's inline scan populates them for the detail endpoint.
 func scanReadRow(rows *sql.Rows) (runtime.AuditEntryRead, string, error) {
 	var (
-		read                                                                              runtime.AuditEntryRead
-		failStage, errorCode, errorMessage, previousHash, agentKeyName, regionCol         sql.NullString
-		decisionMode, aclDecision, reason, identityResolution, principalID                sql.NullString
-		circuitBreakerState                                                               sql.NullString
-		openfga, qdrant, agentKeyID                                                       sql.NullInt64
-		ts                                                                                time.Time
-		id                                                                                string
+		read                                                                runtime.AuditEntryRead
+		failStage, errorCode, errorMessage, agentKeyName, regionCol         sql.NullString
+		decisionMode, aclDecision, reason, identityResolution, principalID  sql.NullString
+		circuitBreakerState                                                 sql.NullString
+		openfga, qdrant, agentKeyID                                         sql.NullInt64
+		ts                                                                  time.Time
+		id                                                                  string
 	)
 	if err := rows.Scan(
 		&read.TraceID, &read.TenantID, &read.UserID, &read.QueryHash, &ts, &regionCol,
@@ -411,7 +477,6 @@ func scanReadRow(rows *sql.Rows) (runtime.AuditEntryRead, string, error) {
 		&circuitBreakerState, &decisionMode, &aclDecision, &reason,
 		&identityResolution, &principalID,
 		&agentKeyID, &agentKeyName,
-		&read.ImmutableDigest, &previousHash,
 		&id,
 	); err != nil {
 		return runtime.AuditEntryRead{}, "", fmt.Errorf("scan audit row: %w", err)
@@ -429,7 +494,6 @@ func scanReadRow(rows *sql.Rows) (runtime.AuditEntryRead, string, error) {
 	read.Reason = reason.String
 	read.IdentityResolution = identityResolution.String
 	read.PrincipalID = principalID.String
-	read.PreviousHash = previousHash.String
 	read.AgentKeyID = agentKeyID.Int64
 	read.AgentKeyName = agentKeyName.String
 	return read, id, nil

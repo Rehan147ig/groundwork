@@ -147,6 +147,25 @@ func (p *PostgresAuditWriter) Write(ctx context.Context, entry AuditEntry) error
 	// Serialize appends per tenant so the previous_hash read and the insert are one
 	// atomic step. Without this lock two concurrent writers could read the same latest
 	// digest and fork the chain. The advisory lock auto-releases when the tx ends.
+	//
+	// PR #22 HA review — TODO future scale lever: this lock is the per-tenant
+	// write ceiling. For a tenant pushing past it, stripe the lock key by a
+	// time bucket (e.g. UTC minute):
+	//   pg_advisory_xact_lock(hashtext($1 || ':' || floor(extract(epoch from now())/60)))
+	// That preserves causal ordering WITHIN a bucket (concurrent writers in the
+	// same minute still serialize) but lets cross-bucket writers proceed in
+	// parallel. The chain then has minute-granularity strict order with
+	// intra-minute parallelism — fine for ledger semantics, ~60x throughput
+	// per tenant. One-line writer change, zero schema change.
+	//
+	// Not implemented today because:
+	//   - the current per-tenant ceiling (~thousands of writes/sec) is far
+	//     above any agent fleet's per-tenant volume;
+	//   - LoadAuditChain's ORDER BY (timestamp_utc, id) tolerates intra-bucket
+	//     reordering; chain verification still works.
+	//
+	// Do NOT replace with an async outbox — that breaks the synchronous
+	// fail-closed contract (TestAuditWrite_FailsEngine).
 	if _, err := tx.ExecContext(writeCtx, `SELECT pg_advisory_xact_lock(hashtext($1))`, entry.TenantID); err != nil {
 		return err
 	}

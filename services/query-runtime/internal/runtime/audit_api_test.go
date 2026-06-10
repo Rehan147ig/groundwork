@@ -624,3 +624,116 @@ func TestAuditNoMutationEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// TestAuditRoutePrecedence pins the Go 1.22 mux disambiguation: the
+// literal paths /v1/audit/stats and /v1/audit/verify must route to
+// their dedicated handlers, NOT to the wildcard /v1/audit/{trace_id}
+// handler that would otherwise match. PR #22 R-5: registration order
+// in server.go relies on ServeMux's specificity-over-wildcard rule;
+// this test guards against a future refactor reversing that.
+func TestAuditRoutePrecedence(t *testing.T) {
+	var (
+		listCalled   bool
+		getCalled    bool
+		statsCalled  bool
+		verifyCalled bool
+		lastTraceID  string
+	)
+	reader := fakeAuditReader{
+		listFn: func(ctx context.Context, _ string, _ AuditFilter, _ int, _ string) (AuditPage, error) {
+			listCalled = true
+			return AuditPage{}, nil
+		},
+		getFn: func(ctx context.Context, _, traceID string) (AuditEntryRead, error) {
+			getCalled = true
+			lastTraceID = traceID
+			return AuditEntryRead{}, ErrAuditEntryNotFound
+		},
+		statsFn: func(ctx context.Context, _ string, _, _ time.Time) (AuditStats, error) {
+			statsCalled = true
+			return AuditStats{}, nil
+		},
+		verifyFn: func(ctx context.Context, _ string) (AuditVerifyResult, error) {
+			verifyCalled = true
+			return AuditVerifyResult{}, nil
+		},
+	}
+	server := newAuditServer(reader)
+
+	// 1. /v1/audit/stats must hit auditStats, not auditGet
+	req, rec := auditRequest(http.MethodGet, "/v1/audit/stats", "gw_test_key")
+	server.Routes().ServeHTTP(rec, req)
+	if !statsCalled {
+		t.Errorf("/v1/audit/stats did not route to stats handler")
+	}
+	if getCalled {
+		t.Errorf("/v1/audit/stats was incorrectly routed to /v1/audit/{trace_id} handler (last trace_id=%q) — wildcard captured a reserved word", lastTraceID)
+	}
+
+	// 2. /v1/audit/verify must hit auditVerify, not auditGet
+	statsCalled, getCalled = false, false
+	req, rec = auditRequest(http.MethodGet, "/v1/audit/verify", "gw_test_key")
+	server.Routes().ServeHTTP(rec, req)
+	if !verifyCalled {
+		t.Errorf("/v1/audit/verify did not route to verify handler")
+	}
+	if getCalled {
+		t.Errorf("/v1/audit/verify was incorrectly routed to /v1/audit/{trace_id} handler (last trace_id=%q)", lastTraceID)
+	}
+
+	// 3. /v1/audit/anything-else must hit auditGet with that trace_id
+	verifyCalled = false
+	req, rec = auditRequest(http.MethodGet, "/v1/audit/abc123", "gw_test_key")
+	server.Routes().ServeHTTP(rec, req)
+	if !getCalled {
+		t.Errorf("/v1/audit/abc123 did not route to /v1/audit/{trace_id} handler")
+	}
+	if lastTraceID != "abc123" {
+		t.Errorf("trace_id capture: want %q, got %q", "abc123", lastTraceID)
+	}
+
+	// 4. /v1/audit (bare) must hit auditList
+	getCalled = false
+	req, rec = auditRequest(http.MethodGet, "/v1/audit", "gw_test_key")
+	server.Routes().ServeHTTP(rec, req)
+	if !listCalled {
+		t.Errorf("/v1/audit did not route to list handler")
+	}
+}
+
+// TestAuditVerify_ChainTooLarge pins the PR #22 R-1 contract: when the
+// AuditReader returns *ChainTooLargeError, the handler responds with
+// 413 + a structured body containing the actual count + the cap. The
+// reader must refuse WITHOUT loading the chain (handler can't enforce
+// that here — it's a property of the impl in engine/audit_query.go).
+func TestAuditVerify_ChainTooLarge(t *testing.T) {
+	reader := fakeAuditReader{
+		verifyFn: func(ctx context.Context, _ string) (AuditVerifyResult, error) {
+			return AuditVerifyResult{}, &ChainTooLargeError{
+				EntriesChecked: 250_000,
+				MaxAllowed:     MaxAuditVerifyEntries,
+			}
+		},
+	}
+	server := newAuditServer(reader)
+
+	req, rec := auditRequest(http.MethodGet, "/v1/audit/verify", "gw_test_key")
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body ChainTooLargeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error != "chain_too_large" {
+		t.Errorf("error code: want chain_too_large, got %q", body.Error)
+	}
+	if body.EntriesChecked != 250_000 {
+		t.Errorf("entries_checked: want 250000, got %d", body.EntriesChecked)
+	}
+	if body.MaxAllowed != MaxAuditVerifyEntries {
+		t.Errorf("max_allowed: want %d, got %d", MaxAuditVerifyEntries, body.MaxAllowed)
+	}
+}

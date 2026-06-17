@@ -27,5 +27,32 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "That does not look like a GitHub PAT." }, { status: 400 });
   }
   const org = typeof body?.org === "string" && body.org.trim() ? body.org.trim() : "acme-financial";
+
+  // Live: trigger the runtime to re-sync the org and write OpenFGA tuples.
+  // Requires an admin-scoped key. Falls back to the static graph when the
+  // runtime is unconfigured/unreachable. The PAT is configured on the
+  // runtime (GITHUB_TOKEN); it is never forwarded or logged here.
+  const runtimeUrl = process.env.QUERY_RUNTIME_URL ?? "";
+  const apiKey = process.env.GROUNDWORK_API_KEY ?? "";
+  if (runtimeUrl && apiKey) {
+    try {
+      const res = await fetch(`${runtimeUrl}/v1/connect/github`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Groundwork-API-Key": apiKey },
+        body: JSON.stringify({}),
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return NextResponse.json({
+          source: "live",
+          org: data.org ?? org,
+          graph: { teams: data.teams ?? [], documents: data.documents ?? [], tuples: data.tuples ?? 0 },
+        });
+      }
+    } catch {
+      /* fall through to demo */
+    }
+  }
   return NextResponse.json({ source: pat ? "live-requested" : "demo", org, graph: ACME_GRAPH });
 }

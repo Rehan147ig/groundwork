@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"groundwork/query-runtime/internal/aclsync/github"
+	"groundwork/query-runtime/internal/connectorsvc"
 	"groundwork/query-runtime/internal/engine"
 	"groundwork/query-runtime/internal/mcp"
 	"groundwork/query-runtime/internal/runtime"
@@ -157,6 +159,23 @@ func main() {
 			},
 		})
 	}
+
+	// Connector surface for the V1 console: POST /v1/connect/github
+	// (re-sync → OpenFGA tuples) and GET /v1/leak-report (exposure scan).
+	// Uses a live GitHub client when GITHUB_TOKEN is set, else the Acme
+	// MockClient so the offline demo is fully live data, not faked.
+	var ghClient github.GitHubClient
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		ghClient = github.NewHTTPClient(token)
+	} else {
+		ghClient = github.NewMockClient()
+	}
+	server.SetGitHubService(connectorsvc.New(
+		ghClient,
+		env("GITHUB_ORG", "acme-financial"),
+		cfg.OpenFGAURL,
+		cfg.OpenFGAStoreName,
+	))
 
 	mcpHTTP := mcp.NewHTTPServer(core, apiKeys, identityVerifier, allowDemoIdentity)
 	mcpHTTP.SetCanonicalIdentity(resolver, canonicalIdentity)

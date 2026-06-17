@@ -20,10 +20,20 @@ export async function GET() {
   const apiKey = process.env.GROUNDWORK_API_KEY ?? "";
   if (runtimeUrl && apiKey) {
     try {
-      const res = await fetch(`${runtimeUrl}/v1/leak-report`, { headers: { "X-Groundwork-API-Key": apiKey }, cache: "no-store" });
+      // Live: runtime runs github.Connector.Snapshot -> leakreport.Analyze.
+      const res = await fetch(`${runtimeUrl}/v1/leak-report`, {
+        headers: { "X-Groundwork-API-Key": apiKey },
+        cache: "no-store",
+      });
       if (res.ok) {
         const data = await res.json();
-        return NextResponse.json({ source: "live", findings: data.findings ?? [] });
+        const findings: Finding[] = (data.findings ?? []).map((f: Record<string, string>) => ({
+          kind: f.kind,
+          severity: (f.severity as Finding["severity"]) ?? "low",
+          title: f.title ?? f.kind,
+          detail: f.detail ?? "",
+        }));
+        return NextResponse.json({ source: "live", findings });
       }
     } catch {
       /* fall through to demo */

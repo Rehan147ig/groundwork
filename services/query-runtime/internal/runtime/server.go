@@ -31,6 +31,13 @@ type Server struct {
 	// that internally reuses engine.LoadAuditChain / VerifyChain.
 	auditReader AuditReader
 
+	// githubSvc is the optional connector-backed service powering the
+	// V1 console's Connect (POST /v1/connect/github) and Leak Report
+	// (GET /v1/leak-report) endpoints. Nil-safe: when unset, those
+	// endpoints return 503 connector_unavailable. Wired via
+	// SetGitHubService from cmd/query-runtime (impl in connectorsvc).
+	githubSvc GitHubService
+
 	// readinessProbes is the optional set of dependency probes that
 	// /readyz invokes on every call. PR #22 HA fix #3: today /readyz
 	// only checks struct wiring, so a dead Postgres still reports 200
@@ -130,6 +137,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/audit/stats", s.requireAPIKey(auditScope, s.auditStats))
 	mux.HandleFunc("GET /v1/audit/verify", s.requireAPIKey(auditScope, s.auditVerify))
 	mux.HandleFunc("GET /v1/audit/{trace_id}", s.requireAPIKey(auditScope, s.auditGet))
+	// Connector surface for the V1 console. Connect mutates the OpenFGA
+	// store (admin scope); leak-report is read-only (audit scope, admin
+	// inherits).
+	mux.HandleFunc("POST /v1/connect/github", s.requireAPIKey("admin", s.connectGitHub))
+	mux.HandleFunc("GET /v1/leak-report", s.requireAPIKey(auditScope, s.leakReport))
 	return mux
 }
 

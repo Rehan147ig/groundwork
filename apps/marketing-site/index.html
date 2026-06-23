@@ -3,11 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Groundwork.IO - Control Plane for Enterprise AI Agents</title>
-  <meta name="description" content="Groundwork governs identity, authorization, and audit for enterprise AI agents." />
-  <link rel="icon" type="image/png" href="assets/groundwork-logo-clean.png" />
+  <title>Groundwork - AI Agent Governance Layer</title>
+  <meta name="description" content="Groundwork gives enterprise AI agents identity, authorization, policy enforcement, context control, and audit proof before they touch private systems." />
+  <link rel="icon" type="image/png" sizes="512x512" href="favicon.png" />
+  <link rel="shortcut icon" type="image/png" href="favicon.png" />
+  <link rel="apple-touch-icon" href="favicon.png" />
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
     tailwind.config = {
@@ -15,162 +17,156 @@
       theme: {
         extend: {
           colors: {
-            ink: "#050605",
-            depth: "#090B09",
-            panel: "#101410",
-            panel2: "#151B15",
-            line: "#273027",
-            line2: "#3B4839",
-            glow: "#75F20A",
-            glow2: "#B6FF63",
-            text: "#F4FFF1",
-            muted: "#AAB8A3",
-            soft: "#DDE8D8",
-            warn: "#F9B37A"
+            ink: "#050706",
+            deep: "#080B0A",
+            panel: "#101512",
+            panel2: "#151D18",
+            line: "#27332C",
+            line2: "#3B4B40",
+            acid: "#74F10B",
+            mint: "#C7FF7B",
+            cyan: "#7DD3FC",
+            amber: "#F7C56B",
+            text: "#F5FFF2",
+            soft: "#D9E8D3",
+            muted: "#9EAE98"
           },
           fontFamily: {
             sans: ["Inter", "sans-serif"],
             mono: ["JetBrains Mono", "monospace"]
           },
-          maxWidth: { site: "1180px" }
+          maxWidth: { site: "1200px" }
         }
       }
-    }
+    };
   </script>
   <style>
     html { scroll-behavior: smooth; }
-    body { background: #050605; color: #F4FFF1; overflow-x: hidden; }
-    .soft-grid {
-      background-image:
-        linear-gradient(rgba(117,242,10,.055) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(117,242,10,.055) 1px, transparent 1px);
-      background-size: 72px 72px;
-      mask-image: linear-gradient(to bottom, black 0%, black 48%, transparent 90%);
-    }
+    body { background: #050706; color: #F5FFF2; overflow-x: hidden; }
+    .hairline { border-color: rgba(217, 232, 211, .12); }
+    .greenline { border-color: rgba(116, 241, 11, .35); }
     .glass {
-      background: linear-gradient(180deg, rgba(21,27,21,.78), rgba(8,10,8,.86));
-      border: 1px solid rgba(117,242,10,.18);
-      box-shadow: 0 24px 80px rgba(0,0,0,.36);
+      background:
+        linear-gradient(180deg, rgba(21, 29, 24, .84), rgba(7, 10, 8, .92));
+      border: 1px solid rgba(217, 232, 211, .12);
+      box-shadow: 0 28px 90px rgba(0, 0, 0, .44);
     }
-    .hairline { border-color: rgba(221,232,216,.11); }
-    .green-line { border-color: rgba(117,242,10,.32); }
-    .premium-glow { box-shadow: 0 0 42px rgba(117,242,10,.16); }
+    .grid-field {
+      background-image:
+        linear-gradient(rgba(116,241,11,.065) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(116,241,11,.065) 1px, transparent 1px);
+      background-size: 76px 76px;
+      mask-image: linear-gradient(to bottom, black 0%, black 54%, transparent 94%);
+    }
+    .topographic {
+      background-image:
+        repeating-linear-gradient(0deg, rgba(217,232,211,.055) 0 1px, transparent 1px 26px),
+        repeating-linear-gradient(90deg, rgba(217,232,211,.04) 0 1px, transparent 1px 26px);
+    }
+    .btn-primary {
+      background: #74F10B;
+      color: #051005;
+      box-shadow: 0 0 34px rgba(116, 241, 11, .22);
+    }
+    .btn-primary:hover { background: #C7FF7B; }
+    .btn-secondary {
+      background: rgba(255,255,255,.035);
+      border: 1px solid rgba(217,232,211,.16);
+    }
+    .btn-secondary:hover { border-color: rgba(116,241,11,.5); color: #C7FF7B; }
     .loader-hide { opacity: 0; visibility: hidden; pointer-events: none; }
-    .loader-mark { animation: loaderFloat 1.8s ease-in-out infinite; }
+    .loader-mark { animation: loaderFloat 1.7s ease-in-out infinite; }
     .loader-line:after {
       content: "";
       position: absolute;
       inset: 0;
       width: 42%;
       border-radius: 999px;
-      background: linear-gradient(90deg, transparent, #75F20A, transparent);
-      animation: loaderSweep 1.25s ease-in-out infinite;
+      background: linear-gradient(90deg, transparent, #74F10B, transparent);
+      animation: loaderSweep 1.2s ease-in-out infinite;
     }
-    .btn-primary {
-      background: #75F20A;
-      color: #061006;
-      box-shadow: 0 0 32px rgba(117,242,10,.22);
+    .trace-line { stroke-dasharray: 12 12; animation: traceMove 3.4s linear infinite; }
+    .trace-line.slow { animation-duration: 4.8s; }
+    .flow-token {
+      position: absolute;
+      width: 11px;
+      height: 11px;
+      border-radius: 999px;
+      background: #74F10B;
+      box-shadow: 0 0 18px rgba(116,241,11,.9);
+      animation: tokenGood 4.2s ease-in-out infinite;
     }
-    .btn-primary:hover { background: #B6FF63; }
-    .btn-secondary {
-      border: 1px solid rgba(221,232,216,.16);
-      background: rgba(255,255,255,.035);
+    .flow-token.block {
+      background: #F7C56B;
+      box-shadow: 0 0 18px rgba(247,197,107,.75);
+      animation: tokenBlock 4.8s ease-in-out .55s infinite;
     }
-    .btn-secondary:hover { border-color: rgba(117,242,10,.46); color: #B6FF63; }
-
-    @keyframes pathFlow {
-      from { stroke-dashoffset: 0; }
-      to { stroke-dashoffset: -96; }
-    }
-    @keyframes cardPulse {
-      0%, 100% { border-color: rgba(221,232,216,.12); transform: translateY(0); }
-      50% { border-color: rgba(117,242,10,.44); transform: translateY(-2px); }
-    }
-    @keyframes packetA {
-      0% { left: 13%; top: 50%; opacity: 0; transform: scale(.6); }
-      12%, 78% { opacity: 1; }
-      42% { left: 50%; top: 50%; transform: scale(1); }
-      100% { left: 86%; top: 50%; opacity: 0; transform: scale(.7); }
-    }
-    @keyframes packetB {
-      0% { left: 20%; top: 30%; opacity: 0; transform: scale(.6); }
-      12%, 52% { opacity: 1; }
-      52% { left: 50%; top: 50%; transform: scale(1); }
-      72%, 100% { left: 50%; top: 50%; opacity: 0; transform: scale(.35); }
-    }
-    @keyframes matrixShift {
-      0%, 100% { opacity: .18; transform: translateY(0); }
-      50% { opacity: .42; transform: translateY(-6px); }
-    }
+    .risk-cell { animation: cellPulse 6s ease-in-out infinite; }
+    .risk-cell:nth-child(2n) { animation-delay: .5s; }
+    .risk-cell:nth-child(3n) { animation-delay: 1.1s; }
+    .risk-cell:nth-child(5n) { animation-delay: 1.7s; }
+    .proof-row { animation: proofScan 7s ease-in-out infinite; }
+    .proof-row:nth-child(2) { animation-delay: .7s; }
+    .proof-row:nth-child(3) { animation-delay: 1.4s; }
+    .proof-row:nth-child(4) { animation-delay: 2.1s; }
     @keyframes loaderFloat {
-      0%, 100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 18px rgba(117,242,10,.34)); }
-      50% { transform: translateY(-5px) scale(1.03); filter: drop-shadow(0 0 34px rgba(117,242,10,.62)); }
+      0%, 100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 18px rgba(116,241,11,.34)); }
+      50% { transform: translateY(-5px) scale(1.04); filter: drop-shadow(0 0 34px rgba(116,241,11,.62)); }
     }
     @keyframes loaderSweep {
       0% { transform: translateX(-120%); opacity: 0; }
       18%, 78% { opacity: 1; }
       100% { transform: translateX(260%); opacity: 0; }
     }
-    .flow-path { stroke-dasharray: 12 12; animation: pathFlow 3.4s linear infinite; }
-    .pulse-card { animation: cardPulse 5.5s ease-in-out infinite; }
-    .packet { position: absolute; width: 12px; height: 12px; border-radius: 999px; pointer-events: none; }
-    .packet.good { animation: packetA 4s ease-in-out infinite; background: #75F20A; box-shadow: 0 0 18px rgba(117,242,10,.85); }
-    .packet.blocked { animation: packetB 4.4s ease-in-out .5s infinite; background: #F9B37A; box-shadow: 0 0 18px rgba(249,179,122,.7); }
-    .matrix-cell { animation: matrixShift 6s ease-in-out infinite; }
-    .matrix-cell:nth-child(2n) { animation-delay: .7s; }
-    .matrix-cell:nth-child(3n) { animation-delay: 1.4s; }
-
-    @media (max-width: 720px) {
-      .hero-visual {
-        min-height: 640px !important;
-        border-radius: 24px;
+    @keyframes traceMove {
+      from { stroke-dashoffset: 0; }
+      to { stroke-dashoffset: -96; }
+    }
+    @keyframes tokenGood {
+      0% { left: 10%; top: 34%; opacity: 0; transform: scale(.6); }
+      12%, 82% { opacity: 1; }
+      45% { left: 50%; top: 50%; transform: scale(1); }
+      100% { left: 88%; top: 35%; opacity: 0; transform: scale(.7); }
+    }
+    @keyframes tokenBlock {
+      0% { left: 12%; top: 64%; opacity: 0; transform: scale(.6); }
+      14%, 58% { opacity: 1; }
+      58% { left: 50%; top: 50%; transform: scale(1); }
+      100% { left: 50%; top: 50%; opacity: 0; transform: scale(.3); }
+    }
+    @keyframes cellPulse {
+      0%, 100% { opacity: .18; transform: translateY(0); }
+      50% { opacity: .55; transform: translateY(-4px); }
+    }
+    @keyframes proofScan {
+      0%, 100% { border-color: rgba(217,232,211,.12); background: rgba(0,0,0,.32); }
+      50% { border-color: rgba(116,241,11,.38); background: rgba(116,241,11,.07); }
+    }
+    @media (max-width: 760px) {
+      .agent-map { min-height: 790px !important; }
+      .map-node { width: calc(100% - 44px) !important; max-width: 330px !important; left: 50% !important; right: auto !important; transform: translateX(-50%) !important; }
+      .map-agent { top: 54px !important; }
+      .map-groundwork { top: 264px !important; padding: 20px !important; }
+      .map-groundwork img { width: 64px !important; height: 64px !important; }
+      .map-groundwork h3 { font-size: 18px !important; line-height: 1.25 !important; }
+      .map-groundwork .grid { margin-top: 14px !important; }
+      .map-systems { top: 568px !important; }
+      .map-status { display: none !important; }
+      .desktop-lines { display: none; }
+      .mobile-line { display: block !important; }
+      .flow-token { animation-name: tokenMobileGood; }
+      .flow-token.block { animation-name: tokenMobileBlock; }
+      @keyframes tokenMobileGood {
+        0% { left: 50%; top: 18%; opacity: 0; transform: scale(.6); }
+        18%, 82% { opacity: 1; }
+        48% { left: 50%; top: 47%; transform: scale(1); }
+        100% { left: 50%; top: 78%; opacity: 0; transform: scale(.7); }
       }
-      .hero-node {
-        width: calc(100% - 48px) !important;
-        max-width: 300px !important;
-      }
-      .hero-node.left {
-        left: 50% !important;
-        top: 58px !important;
-        transform: translateX(-50%) !important;
-      }
-      .hero-node.center {
-        left: 50% !important;
-        top: 226px !important;
-        width: calc(100% - 42px) !important;
-        max-width: 320px !important;
-        transform: translateX(-50%) !important;
-      }
-      .hero-node.right {
-        left: 50% !important;
-        right: auto;
-        top: 430px !important;
-        transform: translateX(-50%) !important;
-      }
-      .hero-visual svg { display: none; }
-      .mobile-flow-rail {
-        display: block !important;
-      }
-      .hero-status-strip {
-        display: none !important;
-      }
-      .packet.good {
-        animation-name: packetMobileGood;
-      }
-      .packet.blocked {
-        animation-name: packetMobileBlocked;
-      }
-      @keyframes packetMobileGood {
-        0% { left: 50%; top: 20%; opacity: 0; transform: scale(.6); }
-        20%, 82% { opacity: 1; }
-        47% { left: 50%; top: 45%; transform: scale(1); }
-        100% { left: 50%; top: 72%; opacity: 0; transform: scale(.7); }
-      }
-      @keyframes packetMobileBlocked {
-        0% { left: 50%; top: 20%; opacity: 0; transform: scale(.6); }
-        20%, 58% { opacity: 1; }
-        58% { left: 50%; top: 45%; transform: scale(1); }
-        100% { left: 50%; top: 45%; opacity: 0; transform: scale(.35); }
+      @keyframes tokenMobileBlock {
+        0% { left: 50%; top: 18%; opacity: 0; transform: scale(.6); }
+        18%, 58% { opacity: 1; }
+        58% { left: 50%; top: 47%; transform: scale(1); }
+        100% { left: 50%; top: 47%; opacity: 0; transform: scale(.3); }
       }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -178,254 +174,315 @@
     }
   </style>
 </head>
-<body class="font-sans antialiased selection:bg-glow selection:text-ink">
+<body class="font-sans antialiased selection:bg-acid selection:text-ink">
   <div id="page-loader" class="fixed inset-0 z-[100] flex items-center justify-center bg-ink transition-all duration-700">
     <div class="relative flex flex-col items-center px-8 text-center">
-      <div class="absolute -inset-20 rounded-full bg-glow/10 blur-3xl"></div>
-      <img src="assets/groundwork-logo-clean.png" alt="Groundwork loading" class="loader-mark relative h-24 w-24 object-contain md:h-28 md:w-28" />
-      <p class="relative mt-7 text-sm font-extrabold uppercase tracking-[0.32em] text-text">Groundwork</p>
-      <p class="relative mt-3 max-w-xs font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Preparing control plane</p>
-      <div class="loader-line relative mt-7 h-1 w-56 overflow-hidden rounded-full bg-white/10"></div>
+      <img src="assets/groundwork-logo-clean.png" alt="Groundwork loading" class="loader-mark h-28 w-28 object-contain md:h-32 md:w-32" />
+      <p class="mt-7 text-sm font-black uppercase tracking-[0.36em] text-text">Groundwork</p>
+      <p class="mt-3 font-mono text-[11px] uppercase tracking-[0.2em] text-muted">Loading governance plane</p>
+      <div class="loader-line relative mt-7 h-1 w-60 overflow-hidden rounded-full bg-white/10"></div>
     </div>
   </div>
 
-  <nav class="fixed top-0 z-50 w-full border-b hairline bg-ink/80 backdrop-blur-2xl">
+  <nav class="fixed top-0 z-50 w-full border-b hairline bg-ink/82 backdrop-blur-2xl">
     <div class="mx-auto flex max-w-site items-center justify-between px-5 py-4 md:px-8">
-      <a href="#top" class="flex items-center gap-3">
-        <img src="assets/groundwork-logo-clean.png" alt="Groundwork logo" class="h-12 w-12 object-contain md:h-14 md:w-14" />
-        <span class="text-lg font-extrabold tracking-[0.18em] text-text md:text-xl">GROUNDWORK</span>
+      <a href="#top" class="flex items-center gap-3" aria-label="Groundwork home">
+        <img src="assets/groundwork-logo-clean.png" alt="Groundwork logo" class="h-14 w-14 object-contain md:h-16 md:w-16" />
+        <div class="leading-none">
+          <p class="text-lg font-black tracking-[0.18em] text-text md:text-xl">GROUNDWORK</p>
+          <p class="mt-1 hidden font-mono text-[10px] uppercase tracking-[0.18em] text-muted sm:block">Agent governance</p>
+        </div>
       </a>
       <div class="hidden items-center gap-8 md:flex">
-        <a class="text-xs font-semibold uppercase tracking-[0.18em] text-muted transition hover:text-glow2" href="#why">Why now</a>
-        <a class="text-xs font-semibold uppercase tracking-[0.18em] text-muted transition hover:text-glow2" href="#platform">Platform</a>
-        <a class="text-xs font-semibold uppercase tracking-[0.18em] text-muted transition hover:text-glow2" href="#today">Today</a>
-        <a class="text-xs font-semibold uppercase tracking-[0.18em] text-muted transition hover:text-glow2" href="#pilot">Pilot</a>
+        <a class="text-xs font-bold uppercase tracking-[0.18em] text-muted transition hover:text-mint" href="#problem">Problem</a>
+        <a class="text-xs font-bold uppercase tracking-[0.18em] text-muted transition hover:text-mint" href="#platform">Platform</a>
+        <a class="text-xs font-bold uppercase tracking-[0.18em] text-muted transition hover:text-mint" href="#proof">Proof</a>
+        <a class="text-xs font-bold uppercase tracking-[0.18em] text-muted transition hover:text-mint" href="#deploy">Deploy</a>
       </div>
-      <a href="#pilot" class="hidden rounded-full px-5 py-2.5 text-xs font-bold uppercase tracking-[0.14em] btn-primary md:inline-flex">Request pilot</a>
-      <button id="mobile-menu-btn" class="rounded-full border hairline px-3 py-2 text-sm text-muted md:hidden">Menu</button>
+      <a href="#pilot" class="hidden rounded-full px-5 py-3 text-xs font-black uppercase tracking-[0.14em] btn-primary md:inline-flex">Request pilot</a>
+      <button id="mobile-menu-btn" class="rounded-full border hairline px-3 py-2 text-sm font-semibold text-muted md:hidden">Menu</button>
     </div>
-    <div id="mobile-menu" class="hidden border-t hairline bg-ink/95 px-5 py-4 md:hidden">
+    <div id="mobile-menu" class="hidden border-t hairline bg-ink/96 px-5 py-4 md:hidden">
       <div class="flex flex-col gap-4">
-        <a class="text-sm text-muted" href="#why">Why now</a>
+        <a class="text-sm text-muted" href="#problem">Problem</a>
         <a class="text-sm text-muted" href="#platform">Platform</a>
-        <a class="text-sm text-muted" href="#today">Today</a>
-        <a class="text-sm text-muted" href="#pilot">Pilot</a>
+        <a class="text-sm text-muted" href="#proof">Proof</a>
+        <a class="text-sm text-muted" href="#deploy">Deploy</a>
+        <a class="text-sm text-mint" href="#pilot">Request pilot</a>
       </div>
     </div>
   </nav>
 
-  <main id="top" class="pt-20">
+  <main id="top" class="pt-24">
     <section class="relative overflow-hidden border-b hairline">
-      <div class="absolute inset-0 soft-grid"></div>
-      <div class="absolute inset-0 bg-[radial-gradient(circle_at_50%_8%,rgba(117,242,10,.16),transparent_30%),radial-gradient(circle_at_80%_28%,rgba(182,255,99,.08),transparent_24%),linear-gradient(180deg,rgba(5,6,5,.22),#050605_84%)]"></div>
-      <div class="relative mx-auto grid max-w-site items-center gap-14 px-5 py-20 md:px-8 md:py-28 lg:grid-cols-[1fr_.92fr]">
+      <div class="absolute inset-0 grid-field"></div>
+      <div class="absolute inset-0 bg-[linear-gradient(180deg,rgba(5,7,6,.22),#050706_86%)]"></div>
+      <div class="relative mx-auto grid max-w-site items-center gap-14 px-5 py-16 md:px-8 md:py-24 lg:grid-cols-[.96fr_1.04fr]">
         <div>
-          <div class="mb-7 inline-flex items-center gap-3 rounded-full border green-line bg-glow/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-glow2">
-            <span class="h-2 w-2 rounded-full bg-glow"></span>
-            Enterprise AI control plane
+          <div class="mb-7 inline-flex items-center gap-3 rounded-full border greenline bg-acid/5 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-mint">
+            <span class="h-2 w-2 rounded-full bg-acid"></span>
+            AI Agent Governance Layer
           </div>
-          <h1 class="max-w-4xl text-5xl font-extrabold leading-[.98] tracking-[-0.04em] text-text md:text-7xl xl:text-8xl">
-            Govern every AI agent action.
+          <h1 class="max-w-4xl text-5xl font-black leading-[1.02] tracking-[-0.05em] text-text md:text-7xl md:leading-[.96] xl:text-8xl">
+            Govern AI agents before they touch company data.
           </h1>
           <p class="mt-8 max-w-2xl text-lg leading-8 text-muted md:text-xl">
-            Groundwork gives every agent an identity, checks every action in real time, and records proof before enterprise systems are touched.
+            Groundwork gives enterprise agents identity, authorization, policy enforcement, context control, and audit proof across private systems.
           </p>
           <div class="mt-10 flex flex-col gap-3 sm:flex-row">
-            <a href="#pilot" class="rounded-full px-7 py-4 text-center text-sm font-bold uppercase tracking-[0.14em] btn-primary">Request pilot</a>
-            <a href="#platform" class="rounded-full px-7 py-4 text-center text-sm font-bold uppercase tracking-[0.14em] text-soft btn-secondary">See the platform</a>
+            <a href="#pilot" class="rounded-full px-7 py-4 text-center text-sm font-black uppercase tracking-[0.14em] btn-primary">Request pilot</a>
+            <a href="#platform" class="rounded-full px-7 py-4 text-center text-sm font-black uppercase tracking-[0.14em] text-soft btn-secondary">Explore platform</a>
           </div>
-          <div class="mt-12 grid max-w-2xl gap-3 text-sm text-muted sm:grid-cols-3">
-            <div class="border-l green-line pl-4">Identity for non-human actors</div>
-            <div class="border-l green-line pl-4">Runtime authorization</div>
-            <div class="border-l green-line pl-4">Audit evidence by default</div>
+          <div class="mt-12 grid max-w-2xl gap-3 sm:grid-cols-3">
+            <div class="border-l greenline pl-4">
+              <p class="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Mode</p>
+              <p class="mt-2 font-bold text-text">Shadow to enforce</p>
+            </div>
+            <div class="border-l greenline pl-4">
+              <p class="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Control</p>
+              <p class="mt-2 font-bold text-text">Fail-closed access</p>
+            </div>
+            <div class="border-l greenline pl-4">
+              <p class="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Proof</p>
+              <p class="mt-2 font-bold text-text">Immutable trace</p>
+            </div>
           </div>
         </div>
 
-        <div class="hero-visual relative min-h-[560px] overflow-hidden rounded-[28px] glass premium-glow">
-          <div class="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(117,242,10,.14),transparent_34%)]"></div>
-          <div class="absolute inset-6 rounded-[22px] border hairline"></div>
-          <div class="mobile-flow-rail hidden absolute left-1/2 top-[134px] h-[350px] w-px -translate-x-1/2 bg-gradient-to-b from-transparent via-glow/70 to-transparent"></div>
-          <div class="mobile-flow-rail hidden absolute left-1/2 top-[182px] h-3 w-3 -translate-x-1/2 rounded-full bg-glow shadow-[0_0_20px_rgba(117,242,10,.9)]"></div>
-          <div class="mobile-flow-rail hidden absolute left-1/2 top-[390px] h-3 w-3 -translate-x-1/2 rounded-full bg-glow shadow-[0_0_20px_rgba(117,242,10,.9)]"></div>
-          <div class="absolute inset-10 grid grid-cols-8 gap-2 opacity-40">
-            <span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span><span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span>
-            <span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span><span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span>
-            <span class="matrix-cell rounded bg-white/5"></span><span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span><span class="matrix-cell rounded bg-glow/10"></span>
-            <span class="matrix-cell rounded bg-white/5"></span><span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span><span class="matrix-cell rounded bg-glow/10"></span>
-            <span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span><span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span>
-            <span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span><span class="matrix-cell rounded bg-glow/10"></span><span class="matrix-cell rounded bg-white/5"></span>
+        <div class="agent-map relative min-h-[620px] overflow-hidden rounded-[34px] glass">
+          <div class="absolute inset-0 topographic opacity-70"></div>
+          <div class="absolute inset-5 rounded-[28px] border hairline"></div>
+          <div class="absolute left-8 right-8 top-8 flex items-center justify-between gap-4">
+            <div class="rounded-full border hairline bg-black/62 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Live policy path</div>
+            <div class="rounded-full border greenline bg-acid/5 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-mint">Fail closed</div>
           </div>
-          <svg class="absolute inset-0 h-full w-full" viewBox="0 0 640 560" preserveAspectRatio="none" aria-hidden="true">
+          <svg class="desktop-lines absolute inset-0 h-full w-full" viewBox="0 0 680 620" preserveAspectRatio="none" aria-hidden="true">
             <defs>
-              <linearGradient id="flowGood" x1="0" x2="1">
-                <stop offset="0" stop-color="#75F20A" stop-opacity=".08"/>
-                <stop offset=".5" stop-color="#75F20A" stop-opacity=".9"/>
-                <stop offset="1" stop-color="#75F20A" stop-opacity=".12"/>
+              <linearGradient id="greenTrace" x1="0" x2="1">
+                <stop offset="0" stop-color="#74F10B" stop-opacity=".06"/>
+                <stop offset=".52" stop-color="#74F10B" stop-opacity=".94"/>
+                <stop offset="1" stop-color="#74F10B" stop-opacity=".08"/>
               </linearGradient>
-              <linearGradient id="flowWarn" x1="0" x2="1">
-                <stop offset="0" stop-color="#F9B37A" stop-opacity=".08"/>
-                <stop offset=".5" stop-color="#F9B37A" stop-opacity=".74"/>
-                <stop offset="1" stop-color="#F9B37A" stop-opacity=".08"/>
+              <linearGradient id="amberTrace" x1="0" x2="1">
+                <stop offset="0" stop-color="#F7C56B" stop-opacity=".06"/>
+                <stop offset=".52" stop-color="#F7C56B" stop-opacity=".75"/>
+                <stop offset="1" stop-color="#F7C56B" stop-opacity=".08"/>
+              </linearGradient>
+              <linearGradient id="cyanTrace" x1="0" x2="1">
+                <stop offset="0" stop-color="#7DD3FC" stop-opacity=".04"/>
+                <stop offset=".52" stop-color="#7DD3FC" stop-opacity=".68"/>
+                <stop offset="1" stop-color="#7DD3FC" stop-opacity=".05"/>
               </linearGradient>
             </defs>
-            <path class="flow-path" d="M90 280 C190 280 230 280 320 280 C412 280 450 280 550 280" fill="none" stroke="url(#flowGood)" stroke-width="3"/>
-            <path class="flow-path" d="M128 168 C215 170 244 220 320 280" fill="none" stroke="url(#flowWarn)" stroke-width="2" style="animation-duration:4.1s"/>
-            <path class="flow-path" d="M512 168 C425 170 396 220 320 280" fill="none" stroke="url(#flowWarn)" stroke-width="2" style="animation-duration:4.4s"/>
+            <path class="trace-line" d="M84 214 C190 214 232 305 340 310 C448 315 488 214 596 214" fill="none" stroke="url(#greenTrace)" stroke-width="3"/>
+            <path class="trace-line slow" d="M84 406 C190 406 232 315 340 310 C448 305 488 406 596 406" fill="none" stroke="url(#amberTrace)" stroke-width="2.5"/>
+            <path class="trace-line" d="M340 130 C340 214 340 236 340 310 C340 386 340 438 340 506" fill="none" stroke="url(#cyanTrace)" stroke-width="2.5"/>
           </svg>
-          <div class="hero-node left absolute left-8 top-[238px] w-36 rounded-2xl border hairline bg-black/72 p-4">
-            <p class="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">Agent</p>
-            <p class="mt-3 text-sm font-semibold text-text">Copilot, workflow, automation</p>
+          <div class="mobile-line hidden absolute left-1/2 top-[172px] h-[400px] w-px -translate-x-1/2 bg-gradient-to-b from-transparent via-acid/80 to-transparent"></div>
+          <span class="flow-token"></span>
+          <span class="flow-token block"></span>
+
+          <div class="map-node map-agent absolute left-8 top-[162px] w-44 rounded-3xl border hairline bg-black/72 p-5">
+            <p class="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">AI agents</p>
+            <h3 class="mt-4 text-lg font-black text-text">Copilots, tools, workflows</h3>
+            <p class="mt-3 text-sm leading-6 text-muted">Requests arrive with agent, user, tenant, and action context.</p>
           </div>
-          <div class="hero-node center pulse-card absolute left-1/2 top-[202px] w-64 -translate-x-1/2 rounded-3xl border green-line bg-black/82 p-6 text-center premium-glow">
-            <img src="assets/groundwork-logo-clean.png" alt="Groundwork mark" class="mx-auto h-20 w-20 object-contain" />
-            <p class="mt-5 font-mono text-[10px] uppercase tracking-[0.22em] text-glow2">Groundwork</p>
-            <p class="mt-2 text-sm font-semibold text-soft">Identity, authorization, audit</p>
+
+          <div class="map-node map-groundwork absolute left-1/2 top-[214px] w-72 -translate-x-1/2 rounded-[30px] border greenline bg-black/86 p-6 text-center shadow-[0_0_55px_rgba(116,241,11,.17)]">
+            <img src="assets/groundwork-logo-clean.png" alt="Groundwork mark" class="mx-auto h-24 w-24 object-contain" />
+            <p class="mt-5 font-mono text-[10px] uppercase tracking-[0.22em] text-mint">Groundwork</p>
+            <h3 class="mt-2 text-xl font-black text-text">Governance decision</h3>
+            <div class="mt-5 grid grid-cols-2 gap-2 text-left text-xs">
+              <span class="rounded-xl border hairline bg-white/5 px-3 py-2 text-soft">Identity</span>
+              <span class="rounded-xl border hairline bg-white/5 px-3 py-2 text-soft">Policy</span>
+              <span class="rounded-xl border hairline bg-white/5 px-3 py-2 text-soft">Context</span>
+              <span class="rounded-xl border hairline bg-white/5 px-3 py-2 text-soft">Trace</span>
+            </div>
           </div>
-          <div class="hero-node right absolute right-8 top-[238px] w-36 rounded-2xl border hairline bg-black/72 p-4">
-            <p class="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">Systems</p>
-            <p class="mt-3 text-sm font-semibold text-text">Knowledge, code, tools, data</p>
+
+          <div class="map-node map-systems absolute right-8 top-[162px] w-44 rounded-3xl border hairline bg-black/72 p-5">
+            <p class="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">Enterprise systems</p>
+            <h3 class="mt-4 text-lg font-black text-text">GitHub, M365, APIs, docs</h3>
+            <p class="mt-3 text-sm leading-6 text-muted">Only approved context or actions pass through.</p>
           </div>
-          <span class="packet good"></span>
-          <span class="packet blocked"></span>
-          <div class="hero-status-strip absolute bottom-8 left-8 right-8 rounded-2xl border hairline bg-black/68 p-4">
-            <div class="grid gap-3 text-xs md:grid-cols-3">
-              <div><span class="text-muted">Identity</span><p class="mt-1 font-semibold text-text">Verified</p></div>
-              <div><span class="text-muted">Policy</span><p class="mt-1 font-semibold text-text">Checked live</p></div>
-              <div><span class="text-muted">Decision</span><p class="mt-1 font-semibold text-glow2">Proof recorded</p></div>
+
+          <div class="map-status absolute bottom-7 left-7 right-7 grid gap-3 md:grid-cols-3">
+            <div class="rounded-2xl border hairline bg-black/68 p-4">
+              <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Decision</p>
+              <p class="mt-2 font-black text-mint">Allow</p>
+            </div>
+            <div class="rounded-2xl border hairline bg-black/68 p-4">
+              <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Decision</p>
+              <p class="mt-2 font-black text-amber">Block</p>
+            </div>
+            <div class="rounded-2xl border hairline bg-black/68 p-4">
+              <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Decision</p>
+              <p class="mt-2 font-black text-cyan">Shadow</p>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <section id="why" class="border-b hairline px-5 py-20 md:px-8 md:py-28">
+    <section id="problem" class="border-b hairline px-5 py-20 md:px-8 md:py-28">
       <div class="mx-auto max-w-site">
         <div class="grid gap-12 lg:grid-cols-[.78fr_1.22fr]">
           <div>
-            <p class="font-mono text-xs uppercase tracking-[0.22em] text-glow2">Why now</p>
-            <h2 class="mt-5 text-4xl font-extrabold tracking-[-0.03em] text-text md:text-6xl">AI agents are creating new access paths faster than enterprises can govern them.</h2>
+            <p class="font-mono text-xs uppercase tracking-[0.22em] text-mint">The enterprise gap</p>
+            <h2 class="mt-5 text-4xl font-black tracking-[-0.04em] text-text md:text-6xl">Agents are becoming employees without employee controls.</h2>
+            <p class="mt-6 text-lg leading-8 text-muted">Enterprises have identity, permissions, audit, and policy for people. AI agents need the same governance before they operate across private systems.</p>
           </div>
           <div class="grid gap-4 md:grid-cols-2">
-            <div class="rounded-3xl border hairline bg-panel/70 p-7">
+            <article class="rounded-[28px] border hairline bg-panel/70 p-7">
               <p class="font-mono text-xs uppercase tracking-[0.18em] text-muted">01</p>
-              <h3 class="mt-8 text-xl font-bold text-text">Agents need identity</h3>
-              <p class="mt-4 leading-7 text-muted">Enterprises need to know which agent acted, which user it represented, and whether that action was authorized.</p>
-            </div>
-            <div class="rounded-3xl border hairline bg-panel/70 p-7">
+              <h3 class="mt-8 text-xl font-black text-text">Who did the agent act for?</h3>
+              <p class="mt-4 leading-7 text-muted">Groundwork binds requests to agent identity, human authority, tenant, and source system context.</p>
+            </article>
+            <article class="rounded-[28px] border hairline bg-panel/70 p-7">
               <p class="font-mono text-xs uppercase tracking-[0.18em] text-muted">02</p>
-              <h3 class="mt-8 text-xl font-bold text-text">Permissions must be checked at runtime</h3>
-              <p class="mt-4 leading-7 text-muted">Static assumptions break when roles, teams, documents, and tools change underneath active AI workflows.</p>
-            </div>
-            <div class="rounded-3xl border hairline bg-panel/70 p-7">
+              <h3 class="mt-8 text-xl font-black text-text">Was the access allowed?</h3>
+              <p class="mt-4 leading-7 text-muted">Authorization is evaluated at decision time instead of relying on stale indexes or copied permissions.</p>
+            </article>
+            <article class="rounded-[28px] border hairline bg-panel/70 p-7">
               <p class="font-mono text-xs uppercase tracking-[0.18em] text-muted">03</p>
-              <h3 class="mt-8 text-xl font-bold text-text">Security teams need proof</h3>
-              <p class="mt-4 leading-7 text-muted">The question is no longer only what the model answered. It is what authority the agent used to get there.</p>
-            </div>
-            <div class="rounded-3xl border green-line bg-glow/5 p-7">
-              <p class="font-mono text-xs uppercase tracking-[0.18em] text-glow2">04</p>
-              <h3 class="mt-8 text-xl font-bold text-text">Unsafe access should fail closed</h3>
-              <p class="mt-4 leading-7 text-muted">When permissions cannot be proven, Groundwork withholds the data or action and records the reason.</p>
-            </div>
+              <h3 class="mt-8 text-xl font-black text-text">What context reached the model?</h3>
+              <p class="mt-4 leading-7 text-muted">Groundwork controls what private snippets, files, and tool results can enter agent context.</p>
+            </article>
+            <article class="rounded-[28px] border greenline bg-acid/5 p-7">
+              <p class="font-mono text-xs uppercase tracking-[0.18em] text-mint">04</p>
+              <h3 class="mt-8 text-xl font-black text-text">Can security prove it?</h3>
+              <p class="mt-4 leading-7 text-muted">Every decision records who, what, why, when, and the policy path behind the result.</p>
+            </article>
           </div>
         </div>
       </div>
     </section>
 
-    <section id="platform" class="relative overflow-hidden border-b hairline bg-depth px-5 py-20 md:px-8 md:py-28">
-      <div class="absolute inset-0 bg-[radial-gradient(circle_at_70%_20%,rgba(117,242,10,.12),transparent_32%)]"></div>
+    <section id="platform" class="relative overflow-hidden border-b hairline bg-deep px-5 py-20 md:px-8 md:py-28">
+      <div class="absolute inset-0 topographic opacity-40"></div>
       <div class="relative mx-auto max-w-site">
         <div class="max-w-3xl">
-          <p class="font-mono text-xs uppercase tracking-[0.22em] text-glow2">Platform thesis</p>
-          <h2 class="mt-5 text-4xl font-extrabold tracking-[-0.03em] text-text md:text-6xl">Every agent needs the controls enterprises expect from humans.</h2>
+          <p class="font-mono text-xs uppercase tracking-[0.22em] text-mint">Platform</p>
+          <h2 class="mt-5 text-4xl font-black tracking-[-0.04em] text-text md:text-6xl">One governance loop for every enterprise agent.</h2>
         </div>
         <div class="mt-12 grid gap-4 md:grid-cols-5">
-          <div class="rounded-3xl border hairline bg-black/45 p-6">
-            <h3 class="text-lg font-bold text-text">Agent identity</h3>
-            <p class="mt-4 text-sm leading-6 text-muted">Bind each agent to a verified actor and tenant.</p>
+          <div class="rounded-[28px] border hairline bg-black/50 p-6">
+            <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-cyan">Identify</p>
+            <h3 class="mt-5 text-lg font-black text-text">Agent identity</h3>
+            <p class="mt-4 text-sm leading-6 text-muted">Know the agent, user, tenant, and acting authority.</p>
           </div>
-          <div class="rounded-3xl border hairline bg-black/45 p-6">
-            <h3 class="text-lg font-bold text-text">Runtime authorization</h3>
-            <p class="mt-4 text-sm leading-6 text-muted">Check access before sensitive context or actions proceed.</p>
+          <div class="rounded-[28px] border hairline bg-black/50 p-6">
+            <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-cyan">Authorize</p>
+            <h3 class="mt-5 text-lg font-black text-text">Live access check</h3>
+            <p class="mt-4 text-sm leading-6 text-muted">Evaluate permissions before sensitive access proceeds.</p>
           </div>
-          <div class="rounded-3xl border hairline bg-black/45 p-6">
-            <h3 class="text-lg font-bold text-text">On-behalf-of control</h3>
-            <p class="mt-4 text-sm leading-6 text-muted">Track whose authority an agent is exercising.</p>
+          <div class="rounded-[28px] border hairline bg-black/50 p-6">
+            <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-cyan">Enforce</p>
+            <h3 class="mt-5 text-lg font-black text-text">Policy decision</h3>
+            <p class="mt-4 text-sm leading-6 text-muted">Allow, block, shadow, or escalate agent actions.</p>
           </div>
-          <div class="rounded-3xl border hairline bg-black/45 p-6">
-            <h3 class="text-lg font-bold text-text">Audit verification</h3>
-            <p class="mt-4 text-sm leading-6 text-muted">Preserve decisions, reasons, and trace evidence.</p>
+          <div class="rounded-[28px] border hairline bg-black/50 p-6">
+            <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-cyan">Control</p>
+            <h3 class="mt-5 text-lg font-black text-text">Context boundary</h3>
+            <p class="mt-4 text-sm leading-6 text-muted">Release only approved data into model context.</p>
           </div>
-          <div class="rounded-3xl border green-line bg-glow/5 p-6">
-            <h3 class="text-lg font-bold text-text">Shadow mode</h3>
-            <p class="mt-4 text-sm leading-6 text-muted">Observe violations before enforcing controls.</p>
+          <div class="rounded-[28px] border greenline bg-acid/5 p-6">
+            <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-mint">Prove</p>
+            <h3 class="mt-5 text-lg font-black text-text">Audit trace</h3>
+            <p class="mt-4 text-sm leading-6 text-muted">Preserve evidence for security and compliance teams.</p>
           </div>
         </div>
       </div>
     </section>
 
     <section class="border-b hairline px-5 py-20 md:px-8 md:py-28">
-      <div class="mx-auto grid max-w-site gap-10 lg:grid-cols-[.9fr_1.1fr] lg:items-center">
+      <div class="mx-auto grid max-w-site gap-12 lg:grid-cols-[.92fr_1.08fr] lg:items-center">
         <div>
-          <p class="font-mono text-xs uppercase tracking-[0.22em] text-glow2">How it works</p>
-          <h2 class="mt-5 text-4xl font-extrabold tracking-[-0.03em] text-text md:text-6xl">Groundwork sits in the execution path.</h2>
-          <p class="mt-6 max-w-xl text-lg leading-8 text-muted">Agents call Groundwork before touching private systems. Groundwork verifies identity, checks policy, allows or blocks the request, and records evidence for security review.</p>
+          <p class="font-mono text-xs uppercase tracking-[0.22em] text-mint">Exposure intelligence</p>
+          <h2 class="mt-5 text-4xl font-black tracking-[-0.04em] text-text md:text-6xl">See what agents would expose before you block them.</h2>
+          <p class="mt-6 max-w-xl text-lg leading-8 text-muted">Shadow mode lets enterprises watch agent behavior, measure violations, and prove the risk before turning on enforcement.</p>
         </div>
-        <div class="rounded-[28px] border hairline bg-panel/70 p-5 md:p-8">
-          <div class="space-y-4">
-            <div class="rounded-2xl border hairline bg-black/50 p-5">
-              <p class="font-mono text-xs uppercase tracking-[0.18em] text-muted">Step 01</p>
-              <p class="mt-3 text-xl font-bold text-text">Agent requests access or action</p>
+        <div class="rounded-[34px] border hairline bg-panel/70 p-5 md:p-7">
+          <div class="grid grid-cols-7 gap-2">
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-acid/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-white/5"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-cyan/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border greenline bg-acid/15"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-white/5"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-amber/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-acid/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-white/5"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-amber/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-acid/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-white/5"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-cyan/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border greenline bg-acid/15"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-white/5"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-cyan/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-white/5"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-acid/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-amber/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-white/5"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-cyan/10"></div>
+            <div class="risk-cell h-16 rounded-2xl border hairline bg-acid/10"></div>
+          </div>
+          <div class="mt-6 grid gap-3 md:grid-cols-3">
+            <div class="rounded-2xl border hairline bg-black/55 p-4">
+              <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Analyzed</p>
+              <p class="mt-2 text-2xl font-black text-text">12,847</p>
             </div>
-            <div class="ml-6 h-8 border-l green-line"></div>
-            <div class="rounded-2xl border green-line bg-glow/5 p-5">
-              <p class="font-mono text-xs uppercase tracking-[0.18em] text-glow2">Step 02</p>
-              <p class="mt-3 text-xl font-bold text-text">Groundwork evaluates identity, tenant, policy, and scope</p>
+            <div class="rounded-2xl border border-amber/30 bg-amber/5 p-4">
+              <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-amber">Would block</p>
+              <p class="mt-2 text-2xl font-black text-text">318</p>
             </div>
-            <div class="ml-6 h-8 border-l green-line"></div>
-            <div class="grid gap-4 md:grid-cols-2">
-              <div class="rounded-2xl border hairline bg-black/50 p-5">
-                <p class="font-mono text-xs uppercase tracking-[0.18em] text-muted">Allowed</p>
-                <p class="mt-3 text-lg font-bold text-text">Authorized context proceeds</p>
-              </div>
-              <div class="rounded-2xl border border-warn/30 bg-warn/5 p-5">
-                <p class="font-mono text-xs uppercase tracking-[0.18em] text-warn">Blocked</p>
-                <p class="mt-3 text-lg font-bold text-text">Unknown access returns nothing</p>
-              </div>
-            </div>
-            <div class="ml-6 h-8 border-l green-line"></div>
-            <div class="rounded-2xl border hairline bg-black/50 p-5">
-              <p class="font-mono text-xs uppercase tracking-[0.18em] text-muted">Step 03</p>
-              <p class="mt-3 text-xl font-bold text-text">Decision evidence is recorded for audit</p>
+            <div class="rounded-2xl border greenline bg-acid/5 p-4">
+              <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-mint">Proof</p>
+              <p class="mt-2 text-2xl font-black text-text">100%</p>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <section id="today" class="border-b hairline bg-depth px-5 py-20 md:px-8 md:py-28">
-      <div class="mx-auto max-w-site">
-        <div class="grid gap-12 lg:grid-cols-[.78fr_1.22fr]">
-          <div>
-            <p class="font-mono text-xs uppercase tracking-[0.22em] text-glow2">What Groundwork does today</p>
-            <h2 class="mt-5 text-4xl font-extrabold tracking-[-0.03em] text-text md:text-6xl">The first wedge is secure AI access to private enterprise knowledge.</h2>
-            <p class="mt-6 text-lg leading-8 text-muted">Retrieval is already becoming a leak path. Groundwork protects that path now while expanding toward broader agent governance.</p>
+    <section id="proof" class="border-b hairline bg-deep px-5 py-20 md:px-8 md:py-28">
+      <div class="mx-auto grid max-w-site gap-12 lg:grid-cols-[.85fr_1.15fr] lg:items-start">
+        <div>
+          <p class="font-mono text-xs uppercase tracking-[0.22em] text-mint">Audit proof</p>
+          <h2 class="mt-5 text-4xl font-black tracking-[-0.04em] text-text md:text-6xl">A clear record of what happened, what would have happened, and why.</h2>
+          <p class="mt-6 text-lg leading-8 text-muted">Security teams need more than logs. They need decision evidence tied to identity, policy, context, and outcome.</p>
+        </div>
+        <div class="rounded-[34px] border hairline bg-black/55 p-5 md:p-7">
+          <div class="mb-5 flex items-center justify-between border-b hairline pb-5">
+            <div>
+              <p class="font-mono text-xs uppercase tracking-[0.18em] text-muted">Trace</p>
+              <p class="mt-2 text-xl font-black text-text">agent-action-8F3A</p>
+            </div>
+            <span class="rounded-full border greenline bg-acid/5 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-mint">verified</span>
           </div>
-          <div class="grid gap-4 md:grid-cols-2">
-            <div class="rounded-3xl border hairline bg-black/45 p-7">
-              <h3 class="text-xl font-bold text-text">Private knowledge access</h3>
-              <p class="mt-4 leading-7 text-muted">Agents and copilots retrieve only context the requester is allowed to see.</p>
+          <div class="space-y-3">
+            <div class="proof-row rounded-2xl border hairline p-4">
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p class="font-bold text-text">Identity resolved</p>
+                <p class="font-mono text-xs text-muted">agent:research-copilot → user:finance-lead</p>
+              </div>
             </div>
-            <div class="rounded-3xl border hairline bg-black/45 p-7">
-              <h3 class="text-xl font-bold text-text">GitHub and internal systems</h3>
-              <p class="mt-4 leading-7 text-muted">Govern access to code, internal docs, and enterprise knowledge surfaces.</p>
+            <div class="proof-row rounded-2xl border hairline p-4">
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p class="font-bold text-text">Policy evaluated</p>
+                <p class="font-mono text-xs text-muted">tenant, region, repository, document scope</p>
+              </div>
             </div>
-            <div class="rounded-3xl border hairline bg-black/45 p-7">
-              <h3 class="text-xl font-bold text-text">Shadow rollout</h3>
-              <p class="mt-4 leading-7 text-muted">Measure what would be blocked before switching enforcement on.</p>
+            <div class="proof-row rounded-2xl border hairline p-4">
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p class="font-bold text-text">Context filtered</p>
+                <p class="font-mono text-xs text-muted">7 allowed · 3 blocked · 0 unknown released</p>
+              </div>
             </div>
-            <div class="rounded-3xl border green-line bg-glow/5 p-7">
-              <h3 class="text-xl font-bold text-text">Fail-closed enforcement</h3>
-              <p class="mt-4 leading-7 text-muted">If access cannot be verified, no private context is released.</p>
+            <div class="proof-row rounded-2xl border hairline p-4">
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p class="font-bold text-text">Evidence sealed</p>
+                <p class="font-mono text-xs text-muted">sha256: 9ce4...82af</p>
+              </div>
             </div>
           </div>
         </div>
@@ -434,78 +491,163 @@
 
     <section class="border-b hairline px-5 py-20 md:px-8 md:py-28">
       <div class="mx-auto max-w-site">
-        <div class="mb-12 max-w-3xl">
-          <p class="font-mono text-xs uppercase tracking-[0.22em] text-glow2">Use cases</p>
-          <h2 class="mt-5 text-4xl font-extrabold tracking-[-0.03em] text-text md:text-6xl">Built for the systems enterprises cannot afford to expose casually.</h2>
+        <div class="grid gap-12 lg:grid-cols-[.86fr_1.14fr] lg:items-start">
+          <div>
+            <p class="font-mono text-xs uppercase tracking-[0.22em] text-mint">Legacy systems</p>
+            <h2 class="mt-5 text-4xl font-black tracking-[-0.04em] text-text md:text-6xl">Bring agent governance into the software enterprises already run.</h2>
+            <p class="mt-6 max-w-xl text-lg leading-8 text-muted">Groundwork is not only for new AI tools. It is designed to sit beside existing banking, healthcare, finance, legal, and government systems so sensitive actions can be checked before they run.</p>
+          </div>
+          <div class="rounded-[34px] border hairline bg-panel/70 p-5 md:p-7">
+            <div class="space-y-4">
+              <div class="rounded-2xl border hairline bg-black/55 p-5">
+                <p class="font-mono text-xs uppercase tracking-[0.18em] text-muted">AI agent</p>
+                <p class="mt-3 text-xl font-black text-text">Requests access, context, or action</p>
+              </div>
+              <div class="ml-6 h-8 border-l greenline"></div>
+              <div class="rounded-2xl border hairline bg-black/55 p-5">
+                <p class="font-mono text-xs uppercase tracking-[0.18em] text-muted">Legacy enterprise app</p>
+                <p class="mt-3 text-xl font-black text-text">Java service, internal API, workflow engine</p>
+              </div>
+              <div class="ml-6 h-8 border-l greenline"></div>
+              <div class="rounded-2xl border greenline bg-acid/5 p-5">
+                <p class="font-mono text-xs uppercase tracking-[0.18em] text-mint">Groundwork decision</p>
+                <p class="mt-3 text-xl font-black text-text">Allow, block, shadow, escalate, and audit</p>
+              </div>
+              <div class="grid gap-3 pt-2 md:grid-cols-3">
+                <div class="rounded-2xl border hairline bg-black/50 p-4">
+                  <p class="font-mono text-[10px] uppercase tracking-[0.16em] text-cyan">Java SDK</p>
+                  <p class="mt-2 text-sm font-bold text-soft">For Spring Boot and legacy enterprise apps.</p>
+                </div>
+                <div class="rounded-2xl border hairline bg-black/50 p-4">
+                  <p class="font-mono text-[10px] uppercase tracking-[0.16em] text-cyan">MCP</p>
+                  <p class="mt-2 text-sm font-bold text-soft">For AI agents and developer tools.</p>
+                </div>
+                <div class="rounded-2xl border hairline bg-black/50 p-4">
+                  <p class="font-mono text-[10px] uppercase tracking-[0.16em] text-cyan">API</p>
+                  <p class="mt-2 text-sm font-bold text-soft">For internal platforms and custom systems.</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="grid gap-4 md:grid-cols-3">
-          <div class="rounded-3xl border hairline bg-panel/70 p-7"><h3 class="text-xl font-bold text-text">Enterprise copilots</h3><p class="mt-4 leading-7 text-muted">Keep assistants aligned with existing permission boundaries.</p></div>
-          <div class="rounded-3xl border hairline bg-panel/70 p-7"><h3 class="text-xl font-bold text-text">Internal AI agents</h3><p class="mt-4 leading-7 text-muted">Authorize agent actions before they touch sensitive systems.</p></div>
-          <div class="rounded-3xl border hairline bg-panel/70 p-7"><h3 class="text-xl font-bold text-text">Regulated teams</h3><p class="mt-4 leading-7 text-muted">Give security, compliance, and audit teams inspectable proof.</p></div>
-          <div class="rounded-3xl border hairline bg-panel/70 p-7"><h3 class="text-xl font-bold text-text">GitHub governance</h3><p class="mt-4 leading-7 text-muted">Prevent AI tools from surfacing code and issues beyond user access.</p></div>
-          <div class="rounded-3xl border hairline bg-panel/70 p-7"><h3 class="text-xl font-bold text-text">Private knowledge</h3><p class="mt-4 leading-7 text-muted">Control retrieval from internal documents and knowledge bases.</p></div>
-          <div class="rounded-3xl border green-line bg-glow/5 p-7"><h3 class="text-xl font-bold text-text">Security review</h3><p class="mt-4 leading-7 text-muted">Show who asked, what was checked, what was blocked, and why.</p></div>
+      </div>
+    </section>
+
+    <section class="border-b hairline bg-deep px-5 py-20 md:px-8 md:py-28">
+      <div class="mx-auto max-w-site">
+        <div class="max-w-3xl">
+          <p class="font-mono text-xs uppercase tracking-[0.22em] text-mint">Regulated industries</p>
+          <h2 class="mt-5 text-4xl font-black tracking-[-0.04em] text-text md:text-6xl">Designed for sectors where agent access needs evidence.</h2>
+          <p class="mt-6 text-lg leading-8 text-muted">Groundwork is built for teams that need a clear view of what happened, what would have happened, what policy applied, and what proof exists afterward.</p>
+        </div>
+        <div class="mt-12 grid gap-4 md:grid-cols-3">
+          <article class="rounded-[30px] border hairline bg-black/45 p-7">
+            <p class="font-mono text-xs uppercase tracking-[0.18em] text-cyan">Banking</p>
+            <h3 class="mt-8 text-2xl font-black text-text">Agent access to financial workflows</h3>
+            <p class="mt-4 leading-7 text-muted">Govern actions around customer files, credit workflows, internal code, and operational knowledge.</p>
+          </article>
+          <article class="rounded-[30px] border hairline bg-black/45 p-7">
+            <p class="font-mono text-xs uppercase tracking-[0.18em] text-cyan">Healthcare</p>
+            <h3 class="mt-8 text-2xl font-black text-text">Controlled access to sensitive records</h3>
+            <p class="mt-4 leading-7 text-muted">Check identity, authority, and context before agents touch patient-adjacent data or internal systems.</p>
+          </article>
+          <article class="rounded-[30px] border greenline bg-acid/5 p-7">
+            <p class="font-mono text-xs uppercase tracking-[0.18em] text-mint">Government and legal</p>
+            <h3 class="mt-8 text-2xl font-black text-text">Audit-ready agent activity</h3>
+            <p class="mt-4 leading-7 text-muted">Preserve decision evidence for privileged documents, case files, procurement, and public-sector workflows.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="deploy" class="border-b hairline px-5 py-20 md:px-8 md:py-28">
+      <div class="mx-auto max-w-site">
+        <div class="max-w-3xl">
+          <p class="font-mono text-xs uppercase tracking-[0.22em] text-mint">Deployment</p>
+          <h2 class="mt-5 text-4xl font-black tracking-[-0.04em] text-text md:text-6xl">Built for teams that need control.</h2>
+        </div>
+        <div class="mt-12 grid gap-4 md:grid-cols-3">
+          <article class="rounded-[30px] border hairline bg-panel/70 p-7">
+            <p class="font-mono text-xs uppercase tracking-[0.18em] text-cyan">Cloud pilot</p>
+            <h3 class="mt-8 text-2xl font-black text-text">Start fast</h3>
+            <p class="mt-4 leading-7 text-muted">Run a governed agent pilot and measure exposure before deep deployment work.</p>
+          </article>
+          <article class="rounded-[30px] border greenline bg-acid/5 p-7">
+            <p class="font-mono text-xs uppercase tracking-[0.18em] text-mint">VPC</p>
+            <h3 class="mt-8 text-2xl font-black text-text">Keep data inside</h3>
+            <p class="mt-4 leading-7 text-muted">Deploy Groundwork where regulated teams need full control over systems, logs, and data.</p>
+          </article>
+          <article class="rounded-[30px] border hairline bg-panel/70 p-7">
+            <p class="font-mono text-xs uppercase tracking-[0.18em] text-cyan">Self-hosted</p>
+            <h3 class="mt-8 text-2xl font-black text-text">Operate your way</h3>
+            <p class="mt-4 leading-7 text-muted">Use your infrastructure, identity providers, audit retention, and security controls.</p>
+          </article>
         </div>
       </div>
     </section>
 
     <section id="pilot" class="px-5 py-20 md:px-8 md:py-28">
-      <div class="mx-auto grid max-w-site gap-12 lg:grid-cols-[.88fr_1.12fr] lg:items-start">
+      <div class="mx-auto grid max-w-site gap-12 lg:grid-cols-[.86fr_1.14fr] lg:items-start">
         <div>
-          <p class="font-mono text-xs uppercase tracking-[0.22em] text-glow2">Private pilot</p>
-          <h2 class="mt-5 text-4xl font-extrabold tracking-[-0.03em] text-text md:text-6xl">Give your AI rollout a control layer.</h2>
-          <p class="mt-6 max-w-xl text-lg leading-8 text-muted">We are working with teams that need governed access, runtime proof, and a safe path from observation to enforcement.</p>
+          <p class="font-mono text-xs uppercase tracking-[0.22em] text-mint">Private pilot</p>
+          <h2 class="mt-5 text-4xl font-black tracking-[-0.04em] text-text md:text-6xl">Bring governance to your AI rollout.</h2>
+          <p class="mt-6 max-w-xl text-lg leading-8 text-muted">We are opening pilots with teams building agents around sensitive code, documents, internal tools, and regulated workflows.</p>
+          <div class="mt-8 space-y-4">
+            <div class="flex gap-4"><span class="mt-2 h-2 w-2 rounded-full bg-acid"></span><p class="text-muted">Run in shadow mode first.</p></div>
+            <div class="flex gap-4"><span class="mt-2 h-2 w-2 rounded-full bg-acid"></span><p class="text-muted">Measure violations and risky context paths.</p></div>
+            <div class="flex gap-4"><span class="mt-2 h-2 w-2 rounded-full bg-acid"></span><p class="text-muted">Move selected flows to enforcement with audit proof.</p></div>
+          </div>
         </div>
-        <form id="waitlist" class="rounded-[28px] border green-line bg-panel/80 p-5 premium-glow md:p-7">
+        <form id="waitlist" class="rounded-[34px] border greenline bg-panel/82 p-5 shadow-[0_0_55px_rgba(116,241,11,.12)] md:p-7">
           <div class="mb-6 border-b hairline pb-5">
-            <p class="text-xl font-bold text-text">Request a technical walkthrough</p>
+            <p class="text-2xl font-black text-text">Request pilot access</p>
             <p class="mt-2 text-sm text-muted">Tell us where AI agents are touching sensitive systems.</p>
           </div>
           <div class="grid gap-4 md:grid-cols-2">
             <label class="block">
               <span class="mb-2 block font-mono text-xs uppercase tracking-[0.16em] text-muted">Work email</span>
-              <input name="email" required type="email" class="w-full rounded-2xl border hairline bg-black/65 p-4 text-sm text-text placeholder:text-muted/50 focus:border-glow focus:ring-0" placeholder="you@company.com" />
+              <input name="email" required type="email" class="w-full rounded-2xl border hairline bg-black/65 p-4 text-sm text-text placeholder:text-muted/50 focus:border-acid focus:ring-0" placeholder="you@company.com" />
             </label>
             <label class="block">
               <span class="mb-2 block font-mono text-xs uppercase tracking-[0.16em] text-muted">Company</span>
-              <input name="company" type="text" class="w-full rounded-2xl border hairline bg-black/65 p-4 text-sm text-text placeholder:text-muted/50 focus:border-glow focus:ring-0" placeholder="Company name" />
+              <input name="company" type="text" class="w-full rounded-2xl border hairline bg-black/65 p-4 text-sm text-text placeholder:text-muted/50 focus:border-acid focus:ring-0" placeholder="Company name" />
             </label>
             <label class="block">
               <span class="mb-2 block font-mono text-xs uppercase tracking-[0.16em] text-muted">Role</span>
-              <input name="role" type="text" class="w-full rounded-2xl border hairline bg-black/65 p-4 text-sm text-text placeholder:text-muted/50 focus:border-glow focus:ring-0" placeholder="CISO, AI platform, security" />
+              <input name="role" type="text" class="w-full rounded-2xl border hairline bg-black/65 p-4 text-sm text-text placeholder:text-muted/50 focus:border-acid focus:ring-0" placeholder="Security, AI platform, engineering" />
             </label>
             <label class="block">
               <span class="mb-2 block font-mono text-xs uppercase tracking-[0.16em] text-muted">Primary use case</span>
-              <select name="data_source" class="w-full rounded-2xl border hairline bg-black/65 p-4 text-sm text-text focus:border-glow focus:ring-0">
-                <option>Enterprise copilots</option>
+              <select name="data_source" class="w-full rounded-2xl border hairline bg-black/65 p-4 text-sm text-text focus:border-acid focus:ring-0">
+                <option>AI agent governance</option>
                 <option>GitHub / code access</option>
+                <option>Microsoft 365 / SharePoint</option>
                 <option>Internal knowledge access</option>
                 <option>Regulated AI rollout</option>
-                <option>Other</option>
               </select>
             </label>
           </div>
-          <button type="submit" class="mt-5 w-full rounded-full px-7 py-4 text-sm font-bold uppercase tracking-[0.14em] btn-primary">Request pilot access</button>
+          <button type="submit" class="mt-5 w-full rounded-full px-7 py-4 text-sm font-black uppercase tracking-[0.14em] btn-primary">Request pilot access</button>
           <p id="waitlist-status" class="mt-4 min-h-6 font-mono text-xs uppercase tracking-[0.14em] text-muted"></p>
         </form>
       </div>
     </section>
   </main>
 
-  <footer class="border-t hairline bg-depth px-5 py-8 md:px-8">
+  <footer class="border-t hairline bg-deep px-5 py-8 md:px-8">
     <div class="mx-auto flex max-w-site flex-col justify-between gap-6 md:flex-row md:items-center">
       <div class="flex items-center gap-3">
-        <img src="assets/groundwork-logo-clean.png" alt="" class="h-9 w-9 object-contain" />
+        <img src="assets/groundwork-logo-clean.png" alt="" class="h-12 w-12 object-contain" />
         <div>
-          <p class="font-extrabold tracking-[0.16em] text-text">GROUNDWORK</p>
-          <p class="mt-1 text-sm text-muted">Control plane for enterprise AI agents.</p>
+          <p class="font-black tracking-[0.16em] text-text">GROUNDWORK</p>
+          <p class="mt-1 text-sm text-muted">AI Agent Governance Layer.</p>
         </div>
       </div>
       <div class="flex flex-wrap gap-6 text-sm text-muted">
-        <a href="#why" class="hover:text-glow2">Why now</a>
-        <a href="#platform" class="hover:text-glow2">Platform</a>
-        <a href="#today" class="hover:text-glow2">Today</a>
-        <a href="#pilot" class="hover:text-glow2">Pilot</a>
+        <a href="#problem" class="hover:text-mint">Problem</a>
+        <a href="#platform" class="hover:text-mint">Platform</a>
+        <a href="#proof" class="hover:text-mint">Proof</a>
+        <a href="#deploy" class="hover:text-mint">Deploy</a>
       </div>
     </div>
   </footer>
@@ -570,9 +712,7 @@
     const mobileMenuBtn = document.getElementById("mobile-menu-btn");
     const mobileMenu = document.getElementById("mobile-menu");
     if (mobileMenuBtn && mobileMenu) {
-      mobileMenuBtn.addEventListener("click", () => {
-        mobileMenu.classList.toggle("hidden");
-      });
+      mobileMenuBtn.addEventListener("click", () => mobileMenu.classList.toggle("hidden"));
       document.querySelectorAll("#mobile-menu a").forEach((link) => {
         link.addEventListener("click", () => mobileMenu.classList.add("hidden"));
       });

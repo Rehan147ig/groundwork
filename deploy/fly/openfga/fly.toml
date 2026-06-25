@@ -1,0 +1,61 @@
+# OpenFGA on Fly.io, backed by your Supabase Postgres datastore.
+#
+# WHY Postgres (not memory): the in-memory engine loses every permission tuple on
+# restart — after a reboot OpenFGA is empty and the runtime fail-closes everyone
+# to zero documents. Postgres makes the permission graph survive restarts.
+#
+# Internal-only: this app publishes NO public port. The runtime reaches it over
+# Fly private networking at http://groundwork-openfga.internal:8080. OpenFGA is
+# never directly reachable from the internet (the non-bypassable design).
+#
+# DEPLOY (from repo root):
+#   fly launch --no-deploy --copy-config --config deploy/fly/openfga/fly.toml \
+#     --name groundwork-openfga --region <region>
+#
+#   # 1) Put the Supabase URI in a secret (SESSION pooler / direct conn, sslmode=require):
+#   fly secrets set -a groundwork-openfga \
+#     OPENFGA_DATASTORE_URI='postgresql://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require'
+#
+#   # 2) One-shot: create OpenFGA's tables in Supabase, then exit:
+#   fly machine run openfga/openfga:latest migrate --rm -a groundwork-openfga \
+#     -e OPENFGA_DATASTORE_ENGINE=postgres \
+#     -e OPENFGA_DATASTORE_URI="$(fly secrets list -a groundwork-openfga >/dev/null; echo USE_THE_SAME_URI)"
+#   # (simplest: pass the URI inline for the one-shot migrate; it is not persisted by --rm)
+#
+#   # 3) Start the server:
+#   fly deploy --config deploy/fly/openfga/fly.toml
+#
+# The runtime auto-creates the OpenFGA STORE + authorization model on its first
+# ACL check — you do not provision those by hand. See the warm-up step in
+# deploy/README.md.
+
+app = "groundwork-openfga"
+primary_region = "iad"   # MUST match the runtime's region for private networking + low latency
+
+[build]
+  image = "openfga/openfga:latest"
+
+[env]
+  OPENFGA_DATASTORE_ENGINE   = "postgres"
+  OPENFGA_LOG_FORMAT         = "json"
+  OPENFGA_HTTP_ADDR          = "0.0.0.0:8080"
+  OPENFGA_GRPC_ADDR          = "0.0.0.0:8081"
+  OPENFGA_PLAYGROUND_ENABLED = "false"
+  # OPENFGA_DATASTORE_URI is a SECRET — set it with `fly secrets set` (see header).
+
+# Run the OpenFGA server (the image entrypoint is the `openfga` binary).
+[processes]
+  app = "run"
+
+# Internal service (no `ports` => not published publicly). Keeps one machine warm
+# so the runtime's private-network calls always have a target.
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

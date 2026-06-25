@@ -1,0 +1,54 @@
+# Groundwork — Render Blueprint (FREE tier, NO credit card).
+#
+# Deploy:
+#   1. Push this repo to GitHub.
+#   2. Render dashboard → New → Blueprint → select the repo.
+#   3. Render reads this file and provisions ONE free web service running the
+#      self-bootstrapping all-in-one image (runtime + OpenFGA + migrations).
+#   4. When prompted, fill in the sync:false secrets (they are NOT stored in git).
+#
+# Notes:
+#   * Free web services sleep after ~15 min idle and cold-start in ~30–60s. The Vercel
+#     console always works (it falls back to demo data while the backend wakes). To keep
+#     it warm, ping <service>.onrender.com/healthz every ~10 min (one always-on service
+#     fits the 750 hrs/month free budget). See deploy/README.md.
+#   * If your Render account uses the older schema, replace `runtime: docker` with
+#     `env: docker`.
+
+services:
+  - type: web
+    name: groundwork-runtime
+    runtime: docker
+    plan: free
+    region: oregon                 # match your Supabase region for low latency
+    dockerfilePath: ./services/query-runtime/Dockerfile.allinone
+    dockerContext: .               # repo root, so ./migrations is bundled
+    healthCheckPath: /healthz
+    autoDeploy: false
+    envVars:
+      - key: GITHUB_ORG
+        value: acme-financial      # no GITHUB_TOKEN ⇒ offline Acme MockClient (planted leak)
+      - key: BOOTSTRAP_TENANT_ID
+        value: acme-financial
+      - key: BOOTSTRAP_TENANT_REGION
+        value: US
+      - key: OPENFGA_STORE_NAME
+        value: groundwork_local
+      # Generous budgets for a cold free instance + Supabase round-trips.
+      - key: ACL_TIMEOUT_MS
+        value: "1000"
+      - key: OPENFGA_TIMEOUT_MS
+        value: "1000"
+      - key: AUDIT_TIMEOUT_MS
+        value: "3000"
+      # ---- Secrets: set these in the Render dashboard (sync:false ⇒ never in git). ----
+      # DATABASE_URL = Supabase SESSION pooler URI (:5432) with ?sslmode=require.
+      #   OpenFGA reuses it automatically (shares the same database, separate tables).
+      - key: DATABASE_URL
+        sync: false
+      - key: GROUNDWORK_JWT_HS_SECRET   # must match the same var on Vercel
+        sync: false
+      - key: BOOTSTRAP_API_KEY          # = GROUNDWORK_API_KEY on Vercel
+        sync: false
+      - key: IMMUTABLE_AUDIT_SALT       # set once, never change
+        sync: false

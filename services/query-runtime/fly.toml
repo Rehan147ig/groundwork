@@ -1,0 +1,85 @@
+# Groundwork query-runtime — Fly.io deployment (Tier 1+).
+#
+# Deploy FROM this directory so the Docker build context matches the Dockerfile's
+# COPY paths (go.mod / go.sum / cmd / internal):
+#
+#   cd services/query-runtime
+#   fly launch --no-deploy --copy-config --name groundwork-runtime --region <region>
+#   # set the secrets listed under [secrets] below, then:
+#   fly deploy
+#
+# Health: /healthz is liveness (200 once the process is up). /readyz is
+# dependency-aware (503 when Postgres/OpenFGA are unreachable) — great for
+# monitoring, but we health-check /healthz so a cold dependency never wedges a
+# rollout. See deploy/README.md for the full runbook and the OpenFGA warm-up step.
+
+app = "groundwork-runtime"
+primary_region = "iad"   # set to the region closest to your Supabase + Qdrant
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Non-secret config. Secrets (DATABASE_URL, GROUNDWORK_JWT_HS_SECRET,
+# BOOTSTRAP_API_KEY, IMMUTABLE_AUDIT_SALT, and at Tier 2 QDRANT_API_KEY) are set
+# with `fly secrets set ...` and are intentionally NOT in this file.
+[env]
+  QUERY_RUNTIME_ADDR      = ":8080"
+
+  # Authorization store (OpenFGA) over Fly private networking — internal only,
+  # never publicly reachable (matches the non-bypassable design).
+  OPENFGA_URL             = "http://groundwork-openfga.internal:8080"
+  OPENFGA_STORE_NAME      = "groundwork_local"
+  OPENFGA_TIMEOUT_MS      = "500"
+
+  # GitHub connector source. With no GITHUB_TOKEN secret, the runtime uses the
+  # offline Acme MockClient (the demo org, including the planted engineering ->
+  # finance-budget leak). Set a GITHUB_TOKEN secret to point at a real org.
+  GITHUB_ORG              = "acme-financial"
+
+  # Tenant identity the bootstrap API key is scoped to.
+  BOOTSTRAP_TENANT_ID     = "acme-financial"
+  BOOTSTRAP_TENANT_REGION = "US"
+
+  # Query path budgets.
+  QUERY_TIMEOUT_MS        = "15000"
+  ACL_TIMEOUT_MS          = "500"
+  BACKEND_HTTP_TIMEOUT_MS = "15000"
+
+  # --- Tier 2 (live RAG retrieval) — leave UNSET for Tier 1. ---
+  # The HTTP retrieval backend activates only when BOTH QDRANT_URL and
+  # ELASTICSEARCH_URL are set; the engine fuses Qdrant (vector) + Elasticsearch
+  # (BM25) and embeds queries via EMBEDDING_URL. Set all three together, then
+  # run deploy/seed-acme.sh. (QDRANT_API_KEY is a secret, not set here.)
+  # QDRANT_URL            = "https://<cluster-id>.<region>.aws.cloud.qdrant.io:6333"
+  # QDRANT_COLLECTION     = "groundwork_chunks"
+  # ELASTICSEARCH_URL     = "http://groundwork-es.internal:9200"
+  # ELASTICSEARCH_INDEX   = "groundwork_chunks"
+  # EMBEDDING_URL         = "http://groundwork-embedder.internal:8000"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+# Secrets to set before `fly deploy` (values are examples of SHAPE only):
+#   fly secrets set \
+#     DATABASE_URL='postgresql://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require' \
+#     GROUNDWORK_JWT_HS_SECRET='<32+ byte random string — MUST match the console>' \
+#     BOOTSTRAP_API_KEY='gw_live_<random>' \
+#     IMMUTABLE_AUDIT_SALT='<random, set once and never change>' \
+#     -a groundwork-runtime
+# Use the Supabase SESSION pooler (port 5432) or direct connection, with
+# ?sslmode=require — NOT the transaction pooler (6543).

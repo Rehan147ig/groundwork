@@ -1,0 +1,42 @@
+# Groundwork — self-bootstrapping ALL-IN-ONE image for FREE, single-service hosting
+# (Render, Koyeb, etc.) with NO credit card required.
+#
+# One container runs the entire live backend:
+#   * applies the app DB migrations to your Supabase Postgres (idempotent)
+#   * runs `openfga migrate`, then starts OpenFGA on 127.0.0.1:8081 — localhost only,
+#     NEVER publicly exposed — using Supabase as its datastore
+#   * starts the Go query-runtime on $PORT (the public port the host assigns)
+#
+# Net effect: set a few env vars in the host dashboard and deploy. No local Docker,
+# no manual migration step, and OpenFGA stays private (the non-bypassable design).
+#
+# BUILD CONTEXT = repository root (so it can bundle ./migrations):
+#   docker build -f services/query-runtime/Dockerfile.allinone -t gw-allinone .
+
+# 1) Build the Go runtime + the golang-migrate CLI (postgres driver).
+FROM golang:1.23-alpine AS build
+WORKDIR /src
+RUN apk add --no-cache build-base
+ENV GOCACHE=/tmp/go-build CGO_ENABLED=0
+COPY services/query-runtime/go.mod services/query-runtime/go.sum ./
+COPY services/query-runtime/cmd ./cmd
+COPY services/query-runtime/internal ./internal
+RUN go build -o /out/query-runtime ./cmd/query-runtime
+RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.17.1
+
+# 2) OpenFGA binary from the official image.
+FROM openfga/openfga:latest AS fga
+
+# 3) Final image: both binaries + migrate CLI + SQL migrations + entrypoint.
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates wget && adduser -D -H appuser
+COPY --from=build /out/query-runtime              /usr/local/bin/query-runtime
+COPY --from=build /go/bin/migrate                 /usr/local/bin/migrate
+COPY --from=fga   /openfga                         /usr/local/bin/openfga
+COPY migrations                                    /migrations
+COPY services/query-runtime/render-entrypoint.sh   /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+USER appuser
+# $PORT is provided by the host (Render/Koyeb); 8080 is the local default.
+ENV PORT=8080
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
